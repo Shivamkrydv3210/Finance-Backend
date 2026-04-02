@@ -1,0 +1,6 @@
+{
+  "name": "invoice-automation",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Invoice processing backend (Node, Supabase, OpenAI)"
+}

@@ -1,0 +1,30 @@
+# Environment variables (keep *only* tracked .env.example files)
+.env
+.env.*
+!.env.example
+!**/.env.example
+.env.backup*
+
+# Node modules
+node_modules/
+
+# Temporary files
+temp/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude skills (user-specific)
+.claude/
+
+
+
+
