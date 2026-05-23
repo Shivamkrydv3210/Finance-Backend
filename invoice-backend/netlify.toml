@@ -1,0 +1,4 @@
+# Deploy static Finance Console only (backend runs elsewhere).
+# In Netlify: set site base directory to `invoice-backend` if the repo root is the parent folder.
+[build]
+  publish = "public"

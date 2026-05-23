@@ -5,6 +5,9 @@
 !**/.env.example
 .env.backup*
 
+# Python virtual environments
+.venv/
+
 # Node modules
 node_modules/
 

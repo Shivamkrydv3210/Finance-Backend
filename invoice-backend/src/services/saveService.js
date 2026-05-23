@@ -1,4 +1,5 @@
 import { supabase } from '../db.js';
+import { postInvoiceToLedger } from './posting/invoicePostingService.js';
 
 const CATEGORY_MAP = {
   fuel: 'fuel',
@@ -128,7 +129,7 @@ export async function saveExtractedInvoice(extracted, options = {}) {
     if (lineError) throw new Error('Failed to save line items: ' + lineError.message);
   }
 
-  return {
+  const summary = {
     success: true,
     invoice_id: invoiceId,
     invoice_number: invoiceNumber,
@@ -139,6 +140,21 @@ export async function saveExtractedInvoice(extracted, options = {}) {
     category,
     line_items_saved: Math.max(lines.length, 1),
   };
+
+  if (options.post_to_ledger !== false) {
+    try {
+      const { data: full, error: fe } = await supabase.from('invoice_header').select('*').eq('invoice_id', invoiceId).single();
+      if (!fe && full) {
+        const ledger = await postInvoiceToLedger(invoiceId, full, { actor: options.actor || 'invoice_save' });
+        summary.ledger = ledger;
+      }
+    } catch (e) {
+      await supabase.from('invoice_header').update({ posting_error: e.message }).eq('invoice_id', invoiceId);
+      summary.ledger_error = e.message;
+    }
+  }
+
+  return summary;
 }
 
 /**
@@ -199,7 +215,7 @@ export async function saveTypedInvoice(fields) {
   });
   if (lineError) throw new Error('Failed to save line items: ' + lineError.message);
 
-  return {
+  const summary = {
     success: true,
     invoice_id: invoiceId,
     invoice_number,
@@ -209,4 +225,19 @@ export async function saveTypedInvoice(fields) {
     date: invoice_date,
     category,
   };
+
+  if (fields.post_to_ledger !== false) {
+    try {
+      const { data: full, error: fe } = await supabase.from('invoice_header').select('*').eq('invoice_id', invoiceId).single();
+      if (!fe && full) {
+        const ledger = await postInvoiceToLedger(invoiceId, full, { actor: 'typed_invoice' });
+        summary.ledger = ledger;
+      }
+    } catch (e) {
+      await supabase.from('invoice_header').update({ posting_error: e.message }).eq('invoice_id', invoiceId);
+      summary.ledger_error = e.message;
+    }
+  }
+
+  return summary;
 }

@@ -3,8 +3,31 @@ import { extractFromImageUrl } from '../services/extractService.js';
 import { saveExtractedInvoice, saveTypedInvoice } from '../services/saveService.js';
 import { queryInvoicesNL } from '../services/queryService.js';
 import { getInvoiceStats } from '../services/statsService.js';
+import { listInvoices, getInvoiceById } from '../services/invoiceListService.js';
 
 const router = Router();
+
+router.get('/invoices', async (req, res) => {
+  try {
+    const result = await listInvoices({
+      limit: req.query.limit,
+      offset: req.query.offset,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/invoices/:invoiceId', async (req, res) => {
+  try {
+    const row = await getInvoiceById(req.params.invoiceId);
+    if (!row) return res.status(404).json({ error: 'Invoice not found' });
+    res.json(row);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 // POST /api/extract - body: { url }
 router.post('/extract', async (req, res) => {
@@ -22,7 +45,10 @@ router.post('/invoices', async (req, res) => {
   try {
     const body = req.body || {};
     if (body.extracted && typeof body.extracted === 'object') {
-      const result = await saveExtractedInvoice(body.extracted);
+      const result = await saveExtractedInvoice(body.extracted, {
+        post_to_ledger: body.post_to_ledger,
+        actor: body.actor,
+      });
       res.json(result);
     } else {
       const result = await saveTypedInvoice({
@@ -40,6 +66,7 @@ router.post('/invoices', async (req, res) => {
         vendor_address: body.vendor_address,
         due_date: body.due_date,
         payment_mode: body.payment_mode,
+        post_to_ledger: body.post_to_ledger,
       });
       res.json(result);
     }

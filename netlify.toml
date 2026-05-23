@@ -1,0 +1,4 @@
+# Static Finance Console — deploy from monorepo root without setting a base directory in Netlify UI.
+# Publish directory is relative to the repository root.
+[build]
+  publish = "invoice-backend/public"

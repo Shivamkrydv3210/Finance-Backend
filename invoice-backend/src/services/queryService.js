@@ -1,10 +1,11 @@
 import OpenAI from 'openai';
 import { OPENAI_API_KEY } from '../config.js';
+import { formatOpenAIRequestError } from '../openaiErrorMessage.js';
 import { supabase } from '../db.js';
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-const SCHEMA = `PostgreSQL tables:
+const SCHEMA = `PostgreSQL tables (read-only SELECT allowed ONLY on these tables — no other tables, no system catalogs):
 
 invoice_header columns:
   invoice_id (bigint PK), vendor_id (bigint FK), vendor_name (text),
@@ -12,7 +13,8 @@ invoice_header columns:
   category (text: fuel | maintenance | repair | parts | other),
   currency (text: INR | USD), subtotal (numeric), tax_amount (numeric),
   total_amount (numeric), payment_mode (text), invoice_type (text),
-  notes (text), file_url (text), source (text), created_at (timestamptz)
+  notes (text), file_url (text), source (text), created_at (timestamptz),
+  journal_entry_id (bigint), ledger_posted_at (timestamptz), posting_error (text)
 
 invoice_line_items columns:
   line_item_id (bigint PK), invoice_id (bigint FK → invoice_header.invoice_id),
@@ -21,7 +23,15 @@ invoice_line_items columns:
 
 vendors columns:
   id (bigint PK), vendor_name (text), vendor_email (text),
-  vendor_phone (text), vendor_address (text)`;
+  vendor_phone (text), vendor_address (text)
+
+accounts: account_id, code, name, account_type (asset|liability|equity|revenue|expense), is_active
+
+fiscal_periods: period_id, period_year, period_month, start_date, end_date, status
+
+journal_entries: journal_entry_id, entry_date, description, source_type, source_ref, status (posted|draft), approval_status, period_id
+
+journal_lines: journal_line_id, journal_entry_id, line_no, account_id, debit, credit, description, tax_scheme, tax_rate, tax_amount`;
 
 const SQL_SYSTEM_PROMPT = `You are a PostgreSQL expert. Convert the user's question into a valid PostgreSQL SELECT query.
 
@@ -30,14 +40,16 @@ ${SCHEMA}
 
 Rules:
 - Output ONLY the raw SQL query — no markdown, no explanation, no semicolon at end
-- Default ORDER BY invoice_date DESC unless user specifies different sort
+- SELECT only — never INSERT/UPDATE/DELETE or access pg_* / information_schema
+- Use ONLY the tables listed above; prefer invoice_header for invoice questions
+- For ledger questions: join journal_lines to journal_entries and accounts as needed; filter journal_entries.status = 'posted' for finalized activity
+- Default ORDER BY invoice_date DESC (invoices) or entry_date DESC (journals) unless user specifies otherwise
 - Default LIMIT 50 unless user asks for specific count or all
-- For aggregation questions (totals, sums, counts, averages, group by): use SUM(), COUNT(), AVG(), GROUP BY accordingly
-- For date filters: use invoice_date >= '2025-01-01' format
+- For aggregations: use SUM(), COUNT(), AVG(), GROUP BY
+- For date filters: use ISO dates e.g. invoice_date >= '2025-01-01'
 - For line item questions: JOIN invoice_line_items ON invoice_line_items.invoice_id = invoice_header.invoice_id
-- Always use invoice_header as the primary table
 - For vendor filters: use vendor_name ILIKE '%name%'
-- For amount filters: use total_amount > value or total_amount BETWEEN x AND y`;
+- For amount filters: use total_amount or debit/credit as appropriate`;
 
 /**
  * Answer a natural language question about invoices by generating SQL and executing via run_invoice_query.
@@ -48,15 +60,20 @@ export async function queryInvoicesNL(question) {
   const q = (question || '').trim();
   if (!q) throw new Error('Please provide a question about your invoices.');
 
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      { role: 'system', content: SQL_SYSTEM_PROMPT },
-      { role: 'user', content: q },
-    ],
-    max_tokens: 600,
-    temperature: 0,
-  });
+  let response;
+  try {
+    response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: SQL_SYSTEM_PROMPT },
+        { role: 'user', content: q },
+      ],
+      max_tokens: 600,
+      temperature: 0,
+    });
+  } catch (err) {
+    throw new Error(formatOpenAIRequestError(err, 'NL query (SQL)'));
+  }
 
   if (!response.choices || !response.choices[0]) {
     throw new Error('OpenAI SQL generation failed: ' + JSON.stringify(response).slice(0, 200));

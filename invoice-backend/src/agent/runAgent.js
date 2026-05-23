@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
-import { OPENAI_API_KEY } from '../config.js';
+import { OPENAI_API_KEY, OPENAI_CHAT_MODEL } from '../config.js';
+import { formatOpenAIRequestError } from '../openaiErrorMessage.js';
 import { TOOL_DEFINITIONS, runTool } from './tools.js';
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
@@ -35,14 +36,19 @@ export async function runAgent(messages, sessionId = 'default') {
   let turn = 0;
 
   while (turn++ < MAX_TURNS) {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: fullMessages,
-      tools: TOOL_DEFINITIONS,
-      tool_choice: 'auto',
-      temperature: 0.3,
-      max_tokens: 2000,
-    });
+    let response;
+    try {
+      response = await openai.chat.completions.create({
+        model: OPENAI_CHAT_MODEL,
+        messages: fullMessages,
+        tools: TOOL_DEFINITIONS,
+        tool_choice: 'auto',
+        temperature: 0.3,
+        max_tokens: 2000,
+      });
+    } catch (err) {
+      throw new Error(formatOpenAIRequestError(err, 'Chat assistant'));
+    }
 
     const choice = response.choices?.[0];
     if (!choice) throw new Error('No response from OpenAI');

@@ -1,5 +1,6 @@
-import OpenAI from 'openai';
-import { OPENAI_API_KEY } from '../config.js';
+import OpenAI, { APIError } from 'openai';
+import { OPENAI_API_KEY, OPENAI_VISION_MODEL } from '../config.js';
+import { formatOpenAIRequestError } from '../openaiErrorMessage.js';
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
@@ -30,7 +31,7 @@ export async function extractFromImageUrl(url) {
   let response;
   try {
     response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: OPENAI_VISION_MODEL,
       messages: [
         {
           role: 'user',
@@ -47,6 +48,9 @@ export async function extractFromImageUrl(url) {
     const msg = (err.message || String(err)).toLowerCase();
     if (/certificate|ssl|tls|unable to get local issuer|could not fetch|fetch.*fail|url.*empty|invalid url/i.test(msg)) {
       throw new Error(SSL_ERROR_MESSAGE);
+    }
+    if (err instanceof APIError) {
+      throw new Error(formatOpenAIRequestError(err, 'Vision extraction'));
     }
     throw new Error('Could not process image from URL: ' + (err.message || err));
   }

@@ -1,0 +1,23 @@
+# Render Blueprint — invoice API (Express in monorepo).
+# Apply from the Render dashboard (Blueprints) or create a Web Service and point at this repo;
+# Render reads build/start from here when using Blueprint flow.
+#
+# After first deploy, set secret env vars in the dashboard if not prompted (sync: false).
+# Docs: https://render.com/docs/infrastructure-as-code
+
+services:
+  - type: web
+    name: invoice-backend
+    runtime: node
+    rootDir: invoice-backend
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
