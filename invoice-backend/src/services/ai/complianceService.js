@@ -1,8 +1,15 @@
 import OpenAI from 'openai';
 import { OPENAI_API_KEY } from '../../config.js';
 import { supabase } from '../../db.js';
+import { getRecordKeepingRules, getFilingDeadlines, getCtDeadlines, getVatAdminRules, getKnowledgeSummary } from '../../knowledge/uk-tax/index.js';
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+// A materiality threshold is a judgment call, not itself a statutory figure — £1,000
+// is a reasonable working level for a small UK business's supporting-documentation
+// check; adjust per engagement.
+const DOCUMENTATION_MATERIALITY_GBP = 1000;
+const TAX_COMPLETENESS_MATERIALITY_GBP = 500;
 
 async function runComplianceChecks() {
   const checks = [];
@@ -71,11 +78,11 @@ async function runComplianceChecks() {
     .in('entity_id', invIds.map(String));
   const attachedInvIds = new Set((attachments || []).map((a) => String(a.entity_id)));
   const unattached = (allInvoices || []).filter((i) => !attachedInvIds.has(String(i.invoice_id)));
-  const highValueUnattached = unattached.filter((i) => Number(i.total_amount) > 10000);
+  const highValueUnattached = unattached.filter((i) => Number(i.total_amount) > DOCUMENTATION_MATERIALITY_GBP);
   checks.push({
     check_id: 'document_support',
     title: 'Supporting Documentation',
-    description: 'Invoices above INR 10,000 should have attached supporting documents',
+    description: `Invoices above £${DOCUMENTATION_MATERIALITY_GBP.toLocaleString()} should have attached supporting documents (Companies Act 2006 ss.386-388: records must be sufficient to explain the company's transactions)`,
     status: highValueUnattached.length === 0 ? 'pass' : 'warning',
     severity: highValueUnattached.length > 20 ? 'high' : highValueUnattached.length > 0 ? 'medium' : 'ok',
     items: highValueUnattached.slice(0, 15).map((i) => ({ invoice_id: i.invoice_id, vendor: i.vendor_name, amount: Number(i.total_amount), date: i.invoice_date })),
@@ -86,13 +93,13 @@ async function runComplianceChecks() {
   const { data: bigNoTax } = await supabase
     .from('invoice_header')
     .select('invoice_id, vendor_name, total_amount, invoice_date, category')
-    .gt('total_amount', 5000)
+    .gt('total_amount', TAX_COMPLETENESS_MATERIALITY_GBP)
     .or('tax_amount.is.null,tax_amount.eq.0')
     .limit(30);
   checks.push({
     check_id: 'tax_completeness',
     title: 'Tax Information Completeness',
-    description: 'Invoices above INR 5,000 should have tax amount recorded',
+    description: `Invoices above £${TAX_COMPLETENESS_MATERIALITY_GBP.toLocaleString()} should have VAT recorded (or be genuinely zero-rated/exempt — see VAT Notice 700)`,
     status: (bigNoTax || []).length === 0 ? 'pass' : 'warning',
     severity: (bigNoTax || []).length > 10 ? 'high' : (bigNoTax || []).length > 0 ? 'medium' : 'ok',
     items: (bigNoTax || []).slice(0, 15).map((i) => ({ invoice_id: i.invoice_id, vendor: i.vendor_name, amount: Number(i.total_amount), date: i.invoice_date })),
@@ -200,10 +207,12 @@ async function runComplianceChecks() {
   return checks;
 }
 
-const COMPLIANCE_PROMPT = `You are a statutory auditor reviewing pre-audit compliance checks. For each failed or warning check, provide:
-1. Why this is a compliance risk (reference Indian regulations where applicable — Companies Act, GST Act, Income Tax Act)
-2. Potential consequences of not fixing it
+const COMPLIANCE_PROMPT = `You are a UK statutory auditor reviewing pre-audit compliance checks. For each failed or warning check, provide:
+1. Why this is a compliance risk — reference the specific UK regulation supplied in "uk_reference_rules" (Companies Act 2006 record-keeping, VAT Notice 700/22 Making Tax Digital, Corporation Tax filing deadlines) rather than inventing a citation
+2. Potential consequences of not fixing it (e.g. HMRC penalties, Companies House late filing penalties, qualified audit opinion)
 3. Step-by-step remediation instructions
+
+Only cite a specific Act, SI or HMRC notice if it appears in "uk_reference_rules" — if none of the supplied rules clearly apply to a check, explain the risk in plain terms without inventing a citation.
 
 Return JSON:
 {
@@ -241,11 +250,21 @@ export async function runComplianceAudit() {
       sample: (c.items || []).slice(0, 5),
     }));
 
+    const ukReferenceRules = {
+      record_keeping: getRecordKeepingRules(),
+      filing_deadlines: getFilingDeadlines(),
+      ct_deadlines: getCtDeadlines(),
+      vat_admin: getVatAdminRules(),
+    };
+
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: COMPLIANCE_PROMPT },
-        { role: 'user', content: `Analyze these compliance check results:\n\n${JSON.stringify(summaryForAI, null, 2)}` },
+        {
+          role: 'user',
+          content: `Analyze these compliance check results:\n\n${JSON.stringify(summaryForAI, null, 2)}\n\nuk_reference_rules:\n${JSON.stringify(ukReferenceRules, null, 2)}`,
+        },
       ],
       max_tokens: 2500,
       temperature: 0.15,

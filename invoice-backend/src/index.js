@@ -10,6 +10,7 @@ import bankRoutes from './routes/bank.js';
 import closeRoutes from './routes/close.js';
 import aiRoutes from './routes/ai.js';
 import traceRoutes from './routes/trace.js';
+import knowledgeRoutes from './routes/knowledge.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,8 +25,16 @@ app.use('/api', bankRoutes);
 app.use('/api', closeRoutes);
 app.use('/api', aiRoutes);
 app.use('/api', traceRoutes);
+app.use('/api', knowledgeRoutes);
 
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// no-cache (not no-store): browser still keeps a local copy but must revalidate via
+// ETag/Last-Modified on every load instead of trusting a stale cached copy — otherwise
+// dashboard.js/css edits don't show up until a hard refresh.
+app.use(
+  express.static(path.join(__dirname, '..', 'public'), {
+    setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+  })
+);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 

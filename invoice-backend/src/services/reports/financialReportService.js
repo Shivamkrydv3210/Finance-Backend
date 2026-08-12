@@ -1,4 +1,7 @@
 import { supabase } from '../../db.js';
+import { getStatutoryHeadings } from '../../knowledge/uk-tax/index.js';
+
+const { balance_sheet: BS_HEADING_ORDER, profit_and_loss: PL_HEADING_ORDER, format: STATUTORY_FORMAT } = getStatutoryHeadings();
 
 async function loadAccountsMap(accountIds) {
   const ids = [...new Set(accountIds.filter(Boolean))];
@@ -61,6 +64,8 @@ function accumulateByAccount(lines) {
         code: ln.account?.code,
         name: ln.account?.name,
         account_type: ln.account?.account_type,
+        statutory_heading: ln.account?.statutory_heading,
+        statutory_sort_order: ln.account?.statutory_sort_order || 0,
         debit: 0,
         credit: 0,
       });
@@ -70,6 +75,39 @@ function accumulateByAccount(lines) {
     row.credit += Number(ln.credit || 0);
   }
   return [...map.values()].sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+}
+
+function round2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+/** Debit-normal for assets/expenses, credit-normal for liabilities/equity/revenue. */
+function naturalBalance(row) {
+  if (row.account_type === 'asset' || row.account_type === 'expense') return round2(row.debit - row.credit);
+  return round2(row.credit - row.debit);
+}
+
+/** Groups accumulated account rows into statutory-heading sections, in canonical order. Unheaded accounts land in "Unclassified" rather than disappearing. */
+function buildStatutorySections(rows, headingOrder) {
+  const byHeading = new Map();
+  for (const r of rows) {
+    const heading = r.statutory_heading || 'Unclassified';
+    if (!byHeading.has(heading)) byHeading.set(heading, []);
+    byHeading.get(heading).push({ code: r.code, name: r.name, amount: naturalBalance(r), sort_order: r.statutory_sort_order || 0 });
+  }
+  const orderedHeadings = [...headingOrder, ...[...byHeading.keys()].filter((h) => !headingOrder.includes(h))];
+  const sections = [];
+  for (const heading of orderedHeadings) {
+    const lines = byHeading.get(heading);
+    if (!lines || lines.length === 0) continue;
+    lines.sort((a, b) => a.sort_order - b.sort_order || (a.code || '').localeCompare(b.code || ''));
+    sections.push({ heading, lines, subtotal: round2(lines.reduce((s, l) => s + l.amount, 0)) });
+  }
+  return sections;
+}
+
+function sectionSubtotal(sections, heading) {
+  return sections.find((s) => s.heading === heading)?.subtotal || 0;
 }
 
 export async function trialBalance(fromDate, toDate) {
@@ -98,12 +136,37 @@ export async function profitAndLoss(fromDate, toDate) {
       detail.expense.push({ code: r.code, name: r.name, amount: expAmt });
     }
   }
+  const plAccounts = byAcc.filter((r) => r.account_type === 'revenue' || r.account_type === 'expense');
+  const statutorySections = buildStatutorySections(plAccounts, PL_HEADING_ORDER);
+  const turnover = sectionSubtotal(statutorySections, 'Turnover');
+  const costOfSales = sectionSubtotal(statutorySections, 'Cost of sales');
+  const grossProfit = round2(turnover - costOfSales);
+  const adminExpenses = sectionSubtotal(statutorySections, 'Administrative expenses');
+  const operatingProfit = round2(grossProfit - adminExpenses);
+  const interestPayable = sectionSubtotal(statutorySections, 'Interest payable and similar charges');
+  const profitBeforeTax = round2(operatingProfit - interestPayable);
+  const taxation = sectionSubtotal(statutorySections, 'Taxation');
+  const profitAfterTax = round2(profitBeforeTax - taxation);
+
   return {
     period: { from: fromDate, to: toDate },
     revenue_total: revenue,
     expense_total: expense,
     net_income: revenue - expense,
     lines: detail,
+    statutory: {
+      format: STATUTORY_FORMAT + ' (P&L)',
+      sections: statutorySections,
+      turnover,
+      cost_of_sales: costOfSales,
+      gross_profit: grossProfit,
+      administrative_expenses: adminExpenses,
+      operating_profit: operatingProfit,
+      interest_payable: interestPayable,
+      profit_before_tax: profitBeforeTax,
+      taxation,
+      profit_after_tax: profitAfterTax,
+    },
   };
 }
 
@@ -134,6 +197,25 @@ export async function balanceSheet(asOfDate) {
     }
   }
   const retained = assetsSum - liabSum - eqSum;
+
+  const bsAccounts = byAcc.filter((r) => r.account_type === 'asset' || r.account_type === 'liability' || r.account_type === 'equity');
+  const statutorySections = buildStatutorySections(bsAccounts, BS_HEADING_ORDER);
+  const fixedAssets = round2(
+    sectionSubtotal(statutorySections, 'Fixed assets - Intangible') + sectionSubtotal(statutorySections, 'Fixed assets - Tangible')
+  );
+  const currentAssets = round2(
+    sectionSubtotal(statutorySections, 'Current assets - Stocks') +
+      sectionSubtotal(statutorySections, 'Current assets - Debtors') +
+      sectionSubtotal(statutorySections, 'Current assets - Cash at bank and in hand')
+  );
+  const creditorsWithinOneYear = sectionSubtotal(statutorySections, 'Creditors: amounts falling due within one year');
+  const creditorsAfterOneYear = sectionSubtotal(statutorySections, 'Creditors: amounts falling due after more than one year');
+  const provisions = sectionSubtotal(statutorySections, 'Provisions for liabilities');
+  const capitalAndReserves = sectionSubtotal(statutorySections, 'Capital and reserves');
+  const netCurrentAssets = round2(currentAssets - creditorsWithinOneYear);
+  const totalAssetsLessCurrentLiabilities = round2(fixedAssets + netCurrentAssets);
+  const netAssets = round2(totalAssetsLessCurrentLiabilities - creditorsAfterOneYear - provisions);
+
   return {
     as_of: asOfDate,
     assets: { lines: assets, total: assetsSum },
@@ -141,6 +223,20 @@ export async function balanceSheet(asOfDate) {
     equity: { lines: equity, total: eqSum },
     computed_retained_check: retained,
     assets_equals_liabilities_plus_equity: Math.abs(assetsSum - liabSum - eqSum) < 0.01,
+    statutory: {
+      format: STATUTORY_FORMAT,
+      sections: statutorySections,
+      fixed_assets: fixedAssets,
+      current_assets: currentAssets,
+      creditors_within_one_year: creditorsWithinOneYear,
+      net_current_assets: netCurrentAssets,
+      total_assets_less_current_liabilities: totalAssetsLessCurrentLiabilities,
+      creditors_after_one_year: creditorsAfterOneYear,
+      provisions_for_liabilities: provisions,
+      net_assets: netAssets,
+      capital_and_reserves: capitalAndReserves,
+      net_assets_equals_capital_and_reserves: Math.abs(netAssets - capitalAndReserves) < 0.01,
+    },
   };
 }
 

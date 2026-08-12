@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { OPENAI_API_KEY } from '../../config.js';
 import { supabase } from '../../db.js';
+import { getVatRate, getVatRegistrationThreshold, getCorporationTaxRate, listExpenseRules, getKnowledgeSummary } from '../../knowledge/uk-tax/index.js';
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
@@ -8,11 +9,12 @@ async function gatherTaxData() {
   const sixMonthsAgo = new Date();
   sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
   const since = sixMonthsAgo.toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
 
   const [invoicesRes, journalsRes, taxLinesRes, periodsRes] = await Promise.all([
     supabase
       .from('invoice_header')
-      .select('invoice_id, vendor_name, invoice_number, invoice_date, category, currency, subtotal, tax_amount, total_amount, tax_rate, journal_entry_id')
+      .select('invoice_id, vendor_name, invoice_number, invoice_date, category, expense_category, currency, subtotal, tax_amount, total_amount, tax_rate, journal_entry_id')
       .gte('invoice_date', since)
       .order('invoice_date', { ascending: false })
       .limit(500),
@@ -43,6 +45,14 @@ async function gatherTaxData() {
 
   const missingTax = invoices.filter((i) => (!i.tax_amount || Number(i.tax_amount) === 0) && Number(i.total_amount) > 1000);
   const miscategorized = invoices.filter((i) => i.category === 'other' && Number(i.total_amount) > 500);
+
+  // Invoices claiming VAT on a category the knowledge base blocks recovery for — a
+  // very concrete, high-confidence "leakage" finding, not a generic AI guess.
+  const blockedCategoriesClaimed = invoices.filter((i) => {
+    if (!i.expense_category || !(Number(i.tax_amount) > 0)) return false;
+    const rule = listExpenseRules().find((r) => r.key === i.expense_category);
+    return rule && (rule.vat_recoverable === false || rule.vat_partial_recovery_pct != null);
+  });
 
   const byVendor = {};
   for (const inv of invoices) {
@@ -98,6 +108,13 @@ async function gatherTaxData() {
       amount: Number(i.total_amount),
       date: i.invoice_date,
     })),
+    blocked_vat_claimed: blockedCategoriesClaimed.slice(0, 20).map((i) => ({
+      invoice_id: i.invoice_id,
+      vendor: i.vendor_name,
+      expense_category: i.expense_category,
+      tax_amount: Number(i.tax_amount),
+      date: i.invoice_date,
+    })),
     vendor_tax_inconsistencies: vendorInconsistencies.slice(0, 15),
     tax_by_scheme: taxByScheme,
     fiscal_periods: { current_open: currentFY ? `${currentFY.period_year}-${currentFY.period_month}` : null, locked_count: lockedPeriods.length },
@@ -110,25 +127,34 @@ async function gatherTaxData() {
         }, {})
       ).map(([k, v]) => [k, Math.round(v)])
     ),
+    // Real rates and thresholds the model must reason from — not invent from its
+    // own (possibly stale or wrong-jurisdiction) training data.
+    reference_rates: {
+      vat_standard_rate_pct: getVatRate('standard', today).value,
+      vat_reduced_rate_pct: getVatRate('reduced', today).value,
+      vat_registration_threshold_gbp: getVatRegistrationThreshold(today)?.value,
+      corporation_tax_at_illustrative_profit: getCorporationTaxRate(100000, today),
+      expense_rules: listExpenseRules().map((r) => ({ key: r.key, vat_recoverable: r.vat_recoverable, vat_partial_recovery_pct: r.vat_partial_recovery_pct ?? null, ct_deductible: r.ct_deductible })),
+    },
   };
 }
 
-const TAX_SYSTEM_PROMPT = `You are an expert Indian Chartered Accountant and tax advisor analyzing a company's financial data from their accounting system.
+const TAX_SYSTEM_PROMPT = `You are a UK Chartered Tax Adviser (CTA) analyzing a company's financial data from their accounting system to find VAT and Corporation Tax savings and risks.
 
 Your role:
 1. Identify concrete tax saving opportunities based on the ACTUAL data provided
-2. Find input tax credit (ITC) leakages under GST
-3. Spot miscategorized expenses that could qualify for better tax treatment
-4. Recommend timing strategies for expense recognition
-5. Flag vendor-level tax inconsistencies that suggest missed ITC claims
+2. Find input VAT recovery leakages — invoices with no VAT recorded that should have some, and vendor-level inconsistencies
+3. Flag any invoice in "blocked_vat_claimed" as a compliance RISK, not a saving — it means input VAT was claimed on a category HMRC blocks (client entertainment, car purchases) or only partially allows (car leases, 50%); recommend correcting the claim, not "optimizing" it further
+4. Spot miscategorized expenses that could qualify for better VAT/CT treatment
+5. Recommend timing strategies for expense recognition ahead of the Corporation Tax accounting period end
 
 CRITICAL RULES:
+- You are given real UK rates and rules in "reference_rates" — cite and use THESE figures (VAT rates, the registration threshold, the illustrative Corporation Tax calculation with its Marginal Relief fraction, and per-category VAT/CT rules). Do not state a rate, threshold, or legal rule that isn't present in the supplied data; if you're unsure, say so rather than guessing.
 - Every suggestion MUST reference specific data points (vendor names, amounts, invoice counts)
-- Estimate potential savings in INR for each suggestion
+- Estimate potential savings in GBP (£) for each suggestion
 - Prioritize by potential impact (highest savings first)
 - Be specific — not generic advice. Reference the actual numbers.
-- Use Indian tax context (GST, Income Tax Act sections where relevant)
-- Format response as a JSON array of objects with: { "priority": "high|medium|low", "category": "itc_recovery|recategorization|timing|compliance|vendor_negotiation", "title": "short title", "description": "detailed actionable explanation with specific numbers", "estimated_savings_inr": number, "affected_invoices": number, "action_items": ["step 1", "step 2"] }
+- Format response as a JSON array of objects with: { "priority": "high|medium|low", "category": "vat_recovery|compliance_risk|recategorization|timing|vendor_negotiation", "title": "short title", "description": "detailed actionable explanation with specific numbers, citing the relevant VAT/CT rule where applicable", "estimated_savings_gbp": number, "affected_invoices": number, "action_items": ["step 1", "step 2"] }
 
 Return ONLY the JSON array. No markdown, no explanation outside the array.`;
 
@@ -152,16 +178,17 @@ export async function analyzeForTaxOptimization() {
   try {
     suggestions = JSON.parse(raw);
   } catch {
-    suggestions = [{ priority: 'medium', category: 'general', title: 'AI Analysis', description: raw, estimated_savings_inr: 0, affected_invoices: 0, action_items: [] }];
+    suggestions = [{ priority: 'medium', category: 'general', title: 'AI Analysis', description: raw, estimated_savings_gbp: 0, affected_invoices: 0, action_items: [] }];
   }
 
-  const totalPotentialSavings = suggestions.reduce((s, r) => s + (r.estimated_savings_inr || 0), 0);
+  const totalPotentialSavings = suggestions.reduce((s, r) => s + (r.estimated_savings_gbp || 0), 0);
 
   return {
     generated_at: new Date().toISOString(),
     data_summary: data.summary,
+    knowledge_base: getKnowledgeSummary(),
     suggestions,
-    total_potential_savings_inr: totalPotentialSavings,
+    total_potential_savings_gbp: totalPotentialSavings,
     suggestion_count: suggestions.length,
   };
 }
