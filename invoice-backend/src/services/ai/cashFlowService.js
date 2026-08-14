@@ -116,14 +116,14 @@ async function gatherCashFlowData() {
   };
 }
 
-const FORECAST_PROMPT = `You are a financial analyst specializing in cash flow forecasting for Indian businesses. Analyze the historical data and produce a cash flow forecast.
+const FORECAST_PROMPT = `You are a financial analyst specializing in cash flow forecasting for UK businesses. Analyze the historical data and produce a cash flow forecast.
 
 RULES:
 - Project the next 90 days in three 30-day buckets (Month+1, Month+2, Month+3)
 - Use seasonal patterns, vendor payment cycles, and recent trends
 - Identify any seasonal peaks or troughs
-- Flag cash flow risks (e.g., "outflows likely to spike in March due to year-end vendor settlements")
-- All amounts in INR
+- Flag cash flow risks (e.g., a Corporation Tax payment due 9 months and 1 day after the accounting period end, a VAT quarter payment date, or seasonal vendor settlement spikes)
+- All amounts in GBP (£)
 
 Return JSON:
 {

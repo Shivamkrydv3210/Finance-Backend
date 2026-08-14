@@ -39,7 +39,7 @@ function esc(s) {
     .replace(/"/g, "&quot;");
 }
 
-function fmtMoney(n, cur = "INR") {
+function fmtMoney(n, cur = "GBP") {
   const x = Number(n);
   if (Number.isNaN(x)) return "—";
   return `${cur} ${x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -62,6 +62,7 @@ function lastOfMonth() {
 
 const ROUTES = [
   { path: "/dashboard", label: "Overview", section: "Core" },
+  { path: "/analytics", label: "Analytics", section: "Core" },
   { path: "/invoices", label: "Invoices", section: "Core" },
   { path: "/extract", label: "Extract URL", section: "Core" },
   { path: "/assistant", label: "AI Assistant", section: "Core" },
@@ -72,6 +73,7 @@ const ROUTES = [
   { path: "/trace", label: "Money Trace", section: "Operations" },
   { path: "/close", label: "Month-end & attachments", section: "Operations" },
   { path: "/query", label: "Natural language query", section: "Analytics" },
+  { path: "/knowledge-base", label: "Tax Knowledge Base", section: "Compliance" },
   { path: "/ai-tax", label: "AI Tax Advisor", section: "AI Intelligence" },
   { path: "/ai-anomaly", label: "AI Audit Shield", section: "AI Intelligence" },
   { path: "/ai-narrator", label: "AI Report Insights", section: "AI Intelligence" },
@@ -79,6 +81,39 @@ const ROUTES = [
   { path: "/ai-vendor", label: "Vendor AI", section: "AI Intelligence" },
   { path: "/ai-compliance", label: "AI Compliance", section: "AI Intelligence" },
 ];
+
+/** Chart.js instances to destroy on re-render */
+let analyticsCharts = [];
+
+const CHART_PALETTE = [
+  "#2563eb",
+  "#059669",
+  "#d97706",
+  "#7c3aed",
+  "#dc2626",
+  "#0891b2",
+  "#db2777",
+  "#65a30d",
+];
+
+function destroyAnalyticsCharts() {
+  analyticsCharts.forEach((c) => {
+    try {
+      c.destroy();
+    } catch {
+      /* ignore */
+    }
+  });
+  analyticsCharts = [];
+}
+
+function chartDefaults() {
+  if (typeof Chart === "undefined") return;
+  Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+  Chart.defaults.color = "#64748b";
+  Chart.defaults.plugins.legend.labels.boxWidth = 12;
+  Chart.defaults.plugins.legend.labels.padding = 12;
+}
 
 function getRoute() {
   let h = (location.hash || "#/dashboard").replace(/^#/, "") || "/dashboard";
@@ -116,6 +151,7 @@ function renderNav() {
 function iconFor(path) {
   const icons = {
     "/dashboard": svgHome(),
+    "/analytics": svgChart(),
     "/invoices": svgDoc(),
     "/extract": svgLink(),
     "/assistant": svgChat(),
@@ -126,6 +162,7 @@ function iconFor(path) {
     "/trace": svgTrace(),
     "/close": svgCheck(),
     "/query": svgSearch(),
+    "/knowledge-base": svgLibrary(),
     "/ai-tax": svgShield(),
     "/ai-anomaly": svgAlert(),
     "/ai-narrator": svgStar(),
@@ -187,36 +224,282 @@ function svgUsers() {
 function svgClipboard() {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>';
 }
+function svgLibrary() {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="15" y2="11"/></svg>';
+}
 
 const contentEl = () => $("#main-content");
 
 async function viewDashboard() {
-  setTitle("Overview");
-  const wrap = document.createElement("div");
-  wrap.innerHTML = `<div id="dash-msg"></div>
+  return viewAnalyticsDashboard("Overview");
+}
+
+async function viewAnalytics() {
+  return viewAnalyticsDashboard("Analytics");
+}
+
+async function viewAnalyticsDashboard(pageTitle) {
+  setTitle(pageTitle);
+  destroyAnalyticsCharts();
+  chartDefaults();
+
+  const periodParam = getHashQuery().get("period") || "";
+  // Metabase wiring disabled for now
+  // const metabaseUrl = String(window.__METABASE_URL__ || "").replace(/\/$/, "");
+  // const metabaseEmbed = String(window.__METABASE_EMBED_URL__ || "").trim();
+
+  contentEl().innerHTML = `
+    <div id="dash-msg"></div>
+    <div class="card analytics-toolbar">
+      <div class="card-body analytics-toolbar-row">
+        <div>
+          <label class="field" for="dash-period">Period filter</label>
+          <input type="text" id="dash-period" placeholder="all time · e.g. 2025 or 2025-07" value="${esc(periodParam)}" />
+        </div>
+        <div class="analytics-toolbar-actions">
+          <button type="button" class="btn btn-primary" id="dash-apply">Apply</button>
+          <button type="button" class="btn btn-secondary" id="dash-clear">Clear</button>
+          <a class="btn btn-secondary" href="#/invoices">New invoice</a>
+          <a class="btn btn-secondary" href="#/extract">Extract URL</a>
+          <a class="btn btn-secondary" href="#/reports">Reports</a>
+        </div>
+      </div>
+    </div>
     <div class="grid-stats" id="dash-stats"></div>
-    <div class="card"><div class="card-header"><h2>Quick actions</h2></div><div class="card-body">
-      <a class="btn btn-primary" href="#/invoices">New invoice</a>
-      <a class="btn btn-secondary" href="#/extract">Extract from URL</a>
-      <a class="btn btn-secondary" href="#/reports">View reports</a>
-      <a class="btn btn-secondary" href="#/trace">Money Trace</a>
-    </div></div>`;
-  contentEl().innerHTML = "";
-  contentEl().appendChild(wrap);
+    <div class="analytics-charts" id="dash-charts">
+      <div class="card chart-card">
+        <div class="card-header"><h2>Spend by month</h2></div>
+        <div class="card-body chart-body"><canvas id="chart-month" aria-label="Monthly spend line chart"></canvas></div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-header"><h2>Spend by category</h2></div>
+        <div class="card-body chart-body"><canvas id="chart-category" aria-label="Category doughnut chart"></canvas></div>
+      </div>
+      <div class="card chart-card chart-card-wide">
+        <div class="card-header"><h2>Top vendors</h2></div>
+        <div class="card-body chart-body"><canvas id="chart-vendors" aria-label="Top vendors bar chart"></canvas></div>
+      </div>
+    </div>
+    <div class="analytics-ai-row">
+      <div class="card">
+        <div class="card-header">
+          <h2>AI insight (this month)</h2>
+          <a class="btn btn-ghost btn-sm" href="#/ai-narrator">Full AI Report Insights</a>
+        </div>
+        <div class="card-body">
+          <p style="color:var(--text-muted);margin-top:0">Uses your existing OpenAI report narrator on P&amp;L for the current month.</p>
+          <button type="button" class="btn btn-primary" id="dash-ai-run">Explain this month</button>
+          <div id="dash-ai-out" style="margin-top:1rem"></div>
+        </div>
+      </div>
+      <!--
+      <div class="card">
+        <div class="card-header">
+          <h2>Metabase BI</h2>
+        </div>
+        <div class="card-body">
+          <p style="color:var(--text-muted);margin-top:0">
+            Free self-hosted BI against Supabase. Use <strong>Metabot</strong> inside Metabase for AI Q&amp;A.
+            Setup: <code>docs/METABASE.md</code>.
+          </p>
+          <div class="empty-state metabase-placeholder">
+            Set <code>window.__METABASE_EMBED_URL__</code> in <code>js/api-config.js</code> to a public/guest embed URL,
+            or open Metabase and ask Metabot about invoices and spend.
+          </div>
+        </div>
+      </div>
+      -->
+    </div>`;
+
+  const applyPeriod = () => {
+    const p = ($("#dash-period")?.value || "").trim();
+    const base = getRoute() === "/analytics" ? "/analytics" : "/dashboard";
+    location.hash = p ? `#${base}?period=${encodeURIComponent(p)}` : `#${base}`;
+  };
+  $("#dash-apply").onclick = applyPeriod;
+  $("#dash-period").onkeydown = (e) => {
+    if (e.key === "Enter") applyPeriod();
+  };
+  $("#dash-clear").onclick = () => {
+    const base = getRoute() === "/analytics" ? "/analytics" : "/dashboard";
+    location.hash = `#${base}`;
+  };
+
+  $("#dash-ai-run").onclick = async () => {
+    const out = $("#dash-ai-out");
+    out.innerHTML = aiLoadingCard("this month's P&L");
+    try {
+      const data = await api("/api/ai/narrate-report", {
+        method: "POST",
+        body: JSON.stringify({
+          report_type: "pl",
+          from: firstOfMonth(),
+          to: lastOfMonth(),
+          as_of: lastOfMonth(),
+        }),
+      });
+      const n = data.narrative || {};
+      const insights = (n.key_insights || []).slice(0, 3);
+      out.innerHTML = `
+        <div class="ai-insight-box">
+          <p><strong>Summary:</strong> ${esc(n.executive_summary || "No summary returned.")}</p>
+        </div>
+        ${
+          insights.length
+            ? `<div class="ai-insight-item-list">${insights
+                .map(
+                  (i) =>
+                    `<div class="ai-insight-item"><strong>${esc(i.title)}</strong><p>${esc(i.detail)}</p></div>`
+                )
+                .join("")}</div>`
+            : ""
+        }
+        ${(n.recommendations || []).length ? `<p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:0"><a href="#/ai-narrator">See full recommendations →</a></p>` : ""}`;
+    } catch (e) {
+      out.innerHTML = `<div class="error-banner">${esc(e.message)}</div>`;
+    }
+  };
+
   const msg = $("#dash-msg");
-  const stats = $("#dash-stats");
+  const statsEl = $("#dash-stats");
   try {
-    const s = await api("/api/stats");
+    const qs = periodParam ? `?period=${encodeURIComponent(periodParam)}` : "";
+    const s = await api(`/api/stats${qs}`);
     const byCat = s.by_category || {};
-    const inr = s.inr_total != null ? fmtMoney(s.inr_total, "INR") : "—";
-    const usd = s.usd_total ? ` · USD ${Number(s.usd_total).toLocaleString()}` : "";
-    stats.innerHTML = `
-      <div class="stat-card"><div class="label">Total invoices</div><div class="value">${esc(s.total_invoices ?? "—")}</div></div>
-      <div class="stat-card"><div class="label">Totals (INR)</div><div class="value" style="font-size:1.05rem">${esc(inr)}${esc(usd)}</div></div>
-      <div class="stat-card"><div class="label">Categories</div><div class="value" style="font-size:1rem">${esc(Object.keys(byCat).length)}</div></div>`;
+    const topVendor = s.top_5_vendors?.[0];
+    const base = s.base_currency || "GBP";
+    const byCurrency = s.by_currency || {};
+    const gbp = fmtMoney(s.gbp_total || 0, base);
+    const otherCurrencies = Object.entries(byCurrency).filter(([code]) => code !== base);
+    const otherSpend = otherCurrencies.length
+      ? otherCurrencies.map(([code, v]) => fmtMoney(v.total, code)).join(" · ")
+      : "—";
+
+    statsEl.innerHTML = `
+      <div class="stat-card"><div class="label">Total invoices</div><div class="value">${esc(s.total_invoices ?? "—")}</div>
+        <div class="stat-sub">${esc(s.period || "all time")}</div></div>
+      <div class="stat-card"><div class="label">Spend (${esc(base)})</div><div class="value" style="font-size:1.15rem">${esc(gbp)}</div>
+        <div class="stat-sub">${esc(byCurrency[base]?.count ?? 0)} invoices</div></div>
+      <div class="stat-card"><div class="label">Other currencies</div><div class="value" style="font-size:1rem">${esc(otherSpend)}</div>
+        <div class="stat-sub">not converted — no FX rates held</div></div>
+      <div class="stat-card"><div class="label">Average amount</div><div class="value" style="font-size:1.15rem">${fmtMoney(s.average_amount || 0)}</div></div>
+      <div class="stat-card"><div class="label">Top vendor</div><div class="value" style="font-size:1rem">${esc(topVendor?.vendor || "—")}</div>
+        <div class="stat-sub">${topVendor ? fmtMoney(topVendor.total) : ""}</div></div>
+      <div class="stat-card"><div class="label">Categories</div><div class="value">${esc(Object.keys(byCat).length)}</div></div>`;
+
+    if (typeof Chart === "undefined") {
+      msg.innerHTML = `<div class="error-banner">Chart.js failed to load. Check network / CDN.</div>`;
+      return;
+    }
+
+    const months = s.by_month || [];
+    const monthLabels = months.map((m) => m.month);
+    const monthTotals = months.map((m) => Number(m.total) || 0);
+
+    const catEntries = Object.entries(byCat).sort((a, b) => (b[1].total || 0) - (a[1].total || 0));
+    const catLabels = catEntries.map(([k]) => k);
+    const catTotals = catEntries.map(([, v]) => Number(v.total) || 0);
+
+    const vendors = s.top_5_vendors || [];
+    const vendorLabels = vendors.map((v) => v.vendor);
+    const vendorTotals = vendors.map((v) => Number(v.total) || 0);
+
+    const emptyChartNote = (canvasId, text) => {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const parent = canvas.parentElement;
+      parent.innerHTML = `<div class="empty-state">${esc(text)}</div>`;
+    };
+
+    if (!monthLabels.length) {
+      emptyChartNote("chart-month", "No monthly data yet. Add invoices or clear the period filter.");
+    } else {
+      analyticsCharts.push(
+        new Chart($("#chart-month"), {
+          type: "line",
+          data: {
+            labels: monthLabels,
+            datasets: [
+              {
+                label: "Invoice total",
+                data: monthTotals,
+                borderColor: "#2563eb",
+                backgroundColor: "rgba(37, 99, 235, 0.12)",
+                fill: true,
+                tension: 0.25,
+                pointRadius: 3,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              y: { beginAtZero: true, ticks: { callback: (v) => Number(v).toLocaleString() } },
+            },
+          },
+        })
+      );
+    }
+
+    if (!catLabels.length) {
+      emptyChartNote("chart-category", "No category spend yet.");
+    } else {
+      analyticsCharts.push(
+        new Chart($("#chart-category"), {
+          type: "doughnut",
+          data: {
+            labels: catLabels,
+            datasets: [
+              {
+                data: catTotals,
+                backgroundColor: catLabels.map((_, i) => CHART_PALETTE[i % CHART_PALETTE.length]),
+                borderWidth: 0,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { position: "bottom" } },
+          },
+        })
+      );
+    }
+
+    if (!vendorLabels.length) {
+      emptyChartNote("chart-vendors", "No vendor data yet.");
+    } else {
+      analyticsCharts.push(
+        new Chart($("#chart-vendors"), {
+          type: "bar",
+          data: {
+            labels: vendorLabels,
+            datasets: [
+              {
+                label: "Spend",
+                data: vendorTotals,
+                backgroundColor: "#059669",
+                borderRadius: 6,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            indexAxis: "y",
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { beginAtZero: true, ticks: { callback: (v) => Number(v).toLocaleString() } },
+            },
+          },
+        })
+      );
+    }
   } catch (e) {
     msg.innerHTML = `<div class="error-banner">${esc(e.message)}</div>`;
-    stats.innerHTML = `<div class="stat-card"><div class="label">Status</div><div class="value" style="font-size:1rem">API</div></div>`;
+    statsEl.innerHTML = `<div class="stat-card"><div class="label">Status</div><div class="value" style="font-size:1rem">API error</div></div>`;
   }
 }
 
@@ -527,16 +810,43 @@ async function viewJournals() {
         el.innerHTML = '<div class="empty-state">No posted journals.</div>';
         return;
       }
+      const statusBadge = (j) => {
+        if (j.status === "posted") return '<span class="badge badge-success">Posted</span>';
+        if (j.approval_status === "pending") return '<span class="badge badge-warn">Pending approval</span>';
+        if (j.approval_status === "rejected") return '<span class="badge badge-warn">Rejected</span>';
+        return '<span class="badge badge-muted">Draft</span>';
+      };
       el.innerHTML = entries
-        .map(
-          (j) => `<div style="border-bottom:1px solid var(--border);padding:0.75rem 0">
+        .map((j) => {
+          const lines = j.journal_lines || [];
+          const totalDebit = lines.reduce((s, l) => s + Number(l.debit || 0), 0);
+          const totalCredit = lines.reduce((s, l) => s + Number(l.credit || 0), 0);
+          const balanced = Math.abs(totalDebit - totalCredit) < 0.01;
+          return `<div style="border-bottom:1px solid var(--border);padding:0.75rem 0">
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem">
-            <span><strong>${esc(j.entry_date)}</strong> · ${esc(j.description || "—")} · <span class="badge badge-muted">${esc(j.source_type)}</span> · JE #${j.journal_entry_id}</span>
+            <span><strong>${esc(j.entry_date)}</strong> · ${esc(j.description || "—")} · <span class="badge badge-muted">${esc(j.source_type)}</span> · ${statusBadge(j)} · JE #${j.journal_entry_id}</span>
             <button type="button" class="btn btn-sm btn-secondary btn-trace-je" data-id="${j.journal_entry_id}">Money Trace</button>
           </div>
-          <pre class="json-preview" style="margin-top:0.5rem;max-height:120px">${esc(JSON.stringify(j.journal_lines || [], null, 2))}</pre>
-        </div>`
-        )
+          <div class="table-wrap" style="margin-top:0.5rem"><table class="data">
+            <thead><tr><th>Account</th><th>Description</th><th style="text-align:right">Debit</th><th style="text-align:right">Credit</th></tr></thead>
+            <tbody>${lines
+              .map(
+                (l) => `<tr>
+                  <td><strong>${esc(l.account_code || "—")}</strong> ${esc(l.account_name || "")}</td>
+                  <td>${esc(l.description || "—")}</td>
+                  <td style="text-align:right">${Number(l.debit) > 0 ? fmtMoney(l.debit, l.currency_code) : ""}</td>
+                  <td style="text-align:right">${Number(l.credit) > 0 ? fmtMoney(l.credit, l.currency_code) : ""}</td>
+                </tr>`
+              )
+              .join("")}</tbody>
+            <tfoot><tr style="font-weight:600;border-top:1px solid var(--border)">
+              <td colspan="2">Total ${balanced ? '<span class="badge badge-success">Balanced</span>' : '<span class="badge badge-warn">Unbalanced</span>'}</td>
+              <td style="text-align:right">${fmtMoney(totalDebit)}</td>
+              <td style="text-align:right">${fmtMoney(totalCredit)}</td>
+            </tr></tfoot>
+          </table></div>
+        </div>`;
+        })
         .join("");
       $$(".btn-trace-je").forEach((b) => {
         b.onclick = () => {
@@ -550,6 +860,166 @@ async function viewJournals() {
   loadJe();
 }
 
+function renderTrialBalanceTable(rows) {
+  if (!rows.length) return '<p class="empty-state">No posted activity in range.</p>';
+  return `<div class="table-wrap"><table class="data"><thead><tr>
+    <th>Code</th><th>Name</th><th>Type</th><th style="text-align:right">Debit</th><th style="text-align:right">Credit</th><th style="text-align:right">Net</th>
+  </tr></thead><tbody>${rows
+    .map(
+      (r) =>
+        `<tr><td><strong>${esc(r.code)}</strong></td><td>${esc(r.name)}</td><td><span class="badge badge-muted">${esc(r.account_type)}</span></td><td style="text-align:right">${fmtMoney(r.debit)}</td><td style="text-align:right">${fmtMoney(r.credit)}</td><td style="text-align:right">${fmtMoney(r.net_debit_balance)}</td></tr>`
+    )
+    .join("")}</tbody></table></div>`;
+}
+
+function renderTaxRegisterTable(rows) {
+  if (!rows.length) return '<p class="empty-state">No tax-tagged lines in range.</p>';
+  return `<div class="table-wrap"><table class="data"><thead><tr>
+    <th>Date</th><th>Account</th><th>Scheme</th><th style="text-align:right">Rate</th><th style="text-align:right">Tax amount</th><th>Description</th>
+  </tr></thead><tbody>${rows
+    .map(
+      (r) =>
+        `<tr><td>${esc(r.entry_date)}</td><td>${esc(r.account_code)}</td><td>${esc(r.tax_scheme || "—")}</td><td style="text-align:right">${
+          r.tax_rate != null ? esc(r.tax_rate) + "%" : "—"
+        }</td><td style="text-align:right">${fmtMoney(r.tax_amount)}</td><td>${esc(r.description || "—")}</td></tr>`
+    )
+    .join("")}</tbody></table></div>`;
+}
+
+const VAT_BOX_LABELS = {
+  box_1: "Box 1 — VAT due on sales and other outputs",
+  box_2: "Box 2 — VAT due on acquisitions from Northern Ireland",
+  box_3: "Box 3 — Total VAT due (Box 1 + Box 2)",
+  box_4: "Box 4 — VAT reclaimed on purchases and other inputs",
+  box_5: "Box 5 — Net VAT to pay or reclaim (Box 3 − Box 4)",
+  box_6: "Box 6 — Total value of sales excluding VAT",
+  box_7: "Box 7 — Total value of purchases excluding VAT",
+  box_8: "Box 8 — Value of dispatches to Northern Ireland",
+  box_9: "Box 9 — Value of acquisitions from Northern Ireland",
+};
+
+function renderVatReturn(data) {
+  const boxes = data.boxes || {};
+  const counts = data.line_counts || {};
+  const basis = data.basis || {};
+  const unsupported = new Set((data.unsupported_boxes || []).map((u) => `box_${u.box}`));
+
+  const rows = Object.keys(VAT_BOX_LABELS)
+    .map((key) => {
+      const boxNo = key.replace("box_", "");
+      const strong = key === "box_3" || key === "box_5";
+      const note = unsupported.has(key) ? '<span class="badge badge-warn">not derivable</span>' : "";
+      return `<tr style="${strong ? "font-weight:700;border-top:1px solid var(--border)" : ""}">
+        <td>${esc(VAT_BOX_LABELS[key])} ${note}</td>
+        <td style="text-align:right">${fmtMoney(boxes[key] || 0)}</td>
+        <td style="text-align:right;color:var(--text-muted)">${esc(counts[boxNo] ?? 0)}</td>
+        <td style="color:var(--text-muted);font-size:0.78rem">${esc(basis[key] || "")}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const payable = data.net_position === "payable_to_hmrc";
+  const positionBadge = payable
+    ? `<span class="badge badge-warn">${fmtMoney(data.net_amount || 0)} payable to HMRC</span>`
+    : `<span class="badge badge-success">${fmtMoney(data.net_amount || 0)} reclaimable from HMRC</span>`;
+
+  return `<p style="color:var(--text-muted);font-size:0.8rem;margin:0 0 0.5rem">
+      UK VAT return · ${esc(data.period?.from)} to ${esc(data.period?.to)} · ${esc(data.currency || "GBP")}
+    </p>
+    <div style="margin-bottom:0.75rem">${positionBadge}</div>
+    <div class="table-wrap"><table class="data"><thead><tr>
+      <th>Box</th><th style="text-align:right">Amount</th><th style="text-align:right">Lines</th><th>How it was derived</th>
+    </tr></thead><tbody>${rows}</tbody></table></div>
+    <p style="color:var(--text-muted);font-size:0.75rem;margin-top:0.75rem">
+      Reproducibility hash: <code>${esc((data.content_hash || "").slice(0, 16))}…</code> — recomputing this period must reproduce the same hash.
+    </p>`;
+}
+
+function repSectionHeaderRow(label) {
+  return `<tr><td colspan="2" style="font-weight:600;background:#f8fafc">${esc(label)}</td></tr>`;
+}
+function repSectionRows(section) {
+  if (!section?.lines?.length) return `<tr><td style="padding-left:1.5rem;color:var(--text-muted)">—</td><td></td></tr>`;
+  return section.lines.map((l) => `<tr><td style="padding-left:1.5rem">${esc(l.code)} ${esc(l.name)}</td><td style="text-align:right">${fmtMoney(l.amount)}</td></tr>`).join("");
+}
+function repSubtotalRow(label, amount, strong = false) {
+  return `<tr style="font-weight:${strong ? 700 : 600};border-top:1px solid var(--border)"><td>${esc(label)}</td><td style="text-align:right">${fmtMoney(amount)}</td></tr>`;
+}
+
+function renderProfitAndLoss(data) {
+  const st = data.statutory;
+  if (!st) return '<p class="empty-state">No statutory data returned.</p>';
+  const find = (h) => st.sections.find((s) => s.heading === h);
+  const turnover = find("Turnover");
+  const cos = find("Cost of sales");
+  const admin = find("Administrative expenses");
+  const interest = find("Interest payable and similar charges");
+  const tax = find("Taxation");
+
+  let rows = repSectionHeaderRow("Turnover") + repSectionRows(turnover) + repSubtotalRow("Total turnover", st.turnover);
+  if (cos) rows += repSectionHeaderRow("Cost of sales") + repSectionRows(cos) + repSubtotalRow("Total cost of sales", st.cost_of_sales);
+  rows += repSubtotalRow("Gross profit", st.gross_profit, true);
+  if (admin) rows += repSectionHeaderRow("Administrative expenses") + repSectionRows(admin) + repSubtotalRow("Total administrative expenses", st.administrative_expenses);
+  rows += repSubtotalRow("Operating profit", st.operating_profit, true);
+  if (interest) rows += repSectionHeaderRow("Interest payable and similar charges") + repSectionRows(interest) + repSubtotalRow("Total interest payable", st.interest_payable);
+  rows += repSubtotalRow("Profit before tax", st.profit_before_tax, true);
+  if (tax) rows += repSectionHeaderRow("Taxation") + repSectionRows(tax) + repSubtotalRow("Total taxation", st.taxation);
+  rows += repSubtotalRow("Profit after tax", st.profit_after_tax, true);
+
+  return `<div class="grid-stats" style="margin-bottom:1rem">
+      <div class="stat-card"><div class="label">Turnover</div><div class="value" style="font-size:1.2rem">${fmtMoney(st.turnover)}</div></div>
+      <div class="stat-card"><div class="label">Gross profit</div><div class="value" style="font-size:1.2rem">${fmtMoney(st.gross_profit)}</div></div>
+      <div class="stat-card"><div class="label">Operating profit</div><div class="value" style="font-size:1.2rem">${fmtMoney(st.operating_profit)}</div></div>
+      <div class="stat-card"><div class="label">Profit after tax</div><div class="value" style="font-size:1.2rem">${fmtMoney(st.profit_after_tax)}</div></div>
+    </div>
+    <p style="color:var(--text-muted);font-size:0.8rem;margin:0 0 0.5rem">${esc(st.format)} · ${esc(data.period?.from)} to ${esc(data.period?.to)}</p>
+    <div class="table-wrap"><table class="data"><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderBalanceSheet(data) {
+  const st = data.statutory;
+  if (!st) return '<p class="empty-state">No statutory data returned.</p>';
+  const find = (h) => st.sections.find((s) => s.heading === h);
+
+  let rows = "";
+  for (const h of ["Fixed assets - Intangible", "Fixed assets - Tangible"]) {
+    const s = find(h);
+    if (s) rows += repSectionHeaderRow(h) + repSectionRows(s) + repSubtotalRow("Subtotal", s.subtotal);
+  }
+  rows += repSubtotalRow("Fixed assets", st.fixed_assets, true);
+
+  for (const h of ["Current assets - Stocks", "Current assets - Debtors", "Current assets - Cash at bank and in hand"]) {
+    const s = find(h);
+    if (s) rows += repSectionHeaderRow(h) + repSectionRows(s) + repSubtotalRow("Subtotal", s.subtotal);
+  }
+  rows += repSubtotalRow("Current assets", st.current_assets, true);
+
+  const cred1 = find("Creditors: amounts falling due within one year");
+  if (cred1) rows += repSectionHeaderRow("Creditors: amounts falling due within one year") + repSectionRows(cred1);
+  rows += repSubtotalRow("Creditors: amounts falling due within one year", st.creditors_within_one_year, true);
+  rows += repSubtotalRow("Net current assets", st.net_current_assets, true);
+  rows += repSubtotalRow("Total assets less current liabilities", st.total_assets_less_current_liabilities, true);
+
+  const cred2 = find("Creditors: amounts falling due after more than one year");
+  if (cred2) rows += repSectionHeaderRow("Creditors: amounts falling due after more than one year") + repSectionRows(cred2) + repSubtotalRow("Subtotal", st.creditors_after_one_year);
+  const prov = find("Provisions for liabilities");
+  if (prov) rows += repSectionHeaderRow("Provisions for liabilities") + repSectionRows(prov) + repSubtotalRow("Subtotal", st.provisions_for_liabilities);
+
+  rows += repSubtotalRow("Net assets", st.net_assets, true);
+
+  const cap = find("Capital and reserves");
+  if (cap) rows += repSectionHeaderRow("Capital and reserves") + repSectionRows(cap);
+  rows += repSubtotalRow("Total capital and reserves", st.capital_and_reserves, true);
+
+  const checkBadge = st.net_assets_equals_capital_and_reserves
+    ? '<span class="badge badge-success">Net assets = Capital and reserves</span>'
+    : '<span class="badge badge-warn">Net assets ≠ Capital and reserves — run a closing journal to retained earnings</span>';
+
+  return `<p style="color:var(--text-muted);font-size:0.8rem;margin:0 0 0.5rem">${esc(st.format)} · as of ${esc(data.as_of)}</p>
+    <div style="margin-bottom:0.75rem">${checkBadge}</div>
+    <div class="table-wrap"><table class="data"><tbody>${rows}</tbody></table></div>`;
+}
+
 async function viewReports() {
   setTitle("Financial reports");
   contentEl().innerHTML = `<div class="card"><div class="card-body">
@@ -558,6 +1028,7 @@ async function viewReports() {
       <button type="button" class="tab" data-tab="pl">P &amp; L</button>
       <button type="button" class="tab" data-tab="bs">Balance sheet</button>
       <button type="button" class="tab" data-tab="tax">Tax register</button>
+      <button type="button" class="tab" data-tab="vat">VAT return</button>
       <button type="button" class="tab" data-tab="pack">Export pack</button>
     </div>
     <div class="form-row" style="max-width:480px">
@@ -588,39 +1059,24 @@ async function viewReports() {
       let data;
       if (active === "tb") {
         data = await api(`/api/finance/reports/trial-balance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-        const rows = data.rows || [];
-        out.innerHTML = `<div class="table-wrap"><table class="data"><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Debit</th><th>Credit</th><th>Net</th></tr></thead><tbody>${rows
-          .map(
-            (r) =>
-              `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.account_type)}</td><td>${esc(r.debit)}</td><td>${esc(r.credit)}</td><td>${esc(r.net_debit_balance)}</td></tr>`
-          )
-          .join("")}</tbody></table></div>`;
+        out.innerHTML = renderTrialBalanceTable(data.rows || []);
       } else if (active === "pl") {
         data = await api(`/api/finance/reports/pl?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-        out.innerHTML = `<div class="grid-stats" style="margin-bottom:1rem">
-          <div class="stat-card"><div class="label">Revenue</div><div class="value" style="font-size:1.2rem">${fmtMoney(data.revenue_total)}</div></div>
-          <div class="stat-card"><div class="label">Expense</div><div class="value" style="font-size:1.2rem">${fmtMoney(data.expense_total)}</div></div>
-          <div class="stat-card"><div class="label">Net income</div><div class="value" style="font-size:1.2rem">${fmtMoney(data.net_income)}</div></div>
-        </div>
-        <pre class="json-preview">${esc(JSON.stringify(data.lines, null, 2))}</pre>`;
+        out.innerHTML = renderProfitAndLoss(data);
       } else if (active === "bs") {
         data = await api(`/api/finance/reports/balance-sheet?as_of=${encodeURIComponent(asof)}`);
-        out.innerHTML = `<pre class="json-preview">${esc(JSON.stringify(data, null, 2))}</pre>`;
+        out.innerHTML = renderBalanceSheet(data);
       } else if (active === "tax") {
         data = await api(`/api/finance/reports/tax-register?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-        const rows = data.rows || [];
-        out.innerHTML =
-          rows.length === 0
-            ? "<p class=\"empty-state\">No tax-tagged lines in range.</p>"
-            : `<div class="table-wrap"><table class="data"><thead><tr><th>Date</th><th>Account</th><th>Scheme</th><th>Tax amt</th><th>Desc</th></tr></thead><tbody>${rows
-                .map(
-                  (r) =>
-                    `<tr><td>${esc(r.entry_date)}</td><td>${esc(r.account_code)}</td><td>${esc(r.tax_scheme)}</td><td>${esc(r.tax_amount)}</td><td>${esc(r.description)}</td></tr>`
-                )
-                .join("")}</tbody></table></div>`;
+        out.innerHTML = renderTaxRegisterTable(data.rows || []);
+      } else if (active === "vat") {
+        data = await api(`/api/finance/reports/vat-return?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+        out.innerHTML = renderVatReturn(data);
       } else {
         data = await api(`/api/finance/reports/export-pack?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-        out.innerHTML = `<pre class="json-preview">${esc(JSON.stringify(data, null, 2))}</pre>`;
+        out.innerHTML = `<h3 style="margin:0 0 0.5rem">Trial balance</h3>${renderTrialBalanceTable(data.trial_balance || [])}
+          <h3 style="margin:1.5rem 0 0.5rem">Tax register</h3>${renderTaxRegisterTable(data.tax_register || [])}
+          <p style="color:var(--text-muted);font-size:0.8rem;margin-top:1rem">${esc(data.localization_note || "")}</p>`;
       }
     } catch (e) {
       out.innerHTML = `<div class="error-banner">${esc(e.message)}</div>`;
@@ -1390,8 +1846,216 @@ async function viewAiCompliance() {
   }
 }
 
+function citeHtml(c) {
+  if (!c) return "";
+  const label = c.detail ? `${c.legislation} — ${c.detail}` : c.legislation;
+  return `<a href="${esc(c.url)}" target="_blank" rel="noopener" title="Checked ${esc(c.checked_on || "")}">${esc(label)}</a>`;
+}
+
+function kbTable(headers, rows) {
+  if (!rows.length) return '<p class="empty-state">Nothing to show.</p>';
+  return `<div class="table-wrap"><table class="data"><thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows
+    .map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`)
+    .join("")}</tbody></table></div>`;
+}
+
+function renderVatKnowledge(data) {
+  const rates = kbTable(
+    ["Rate", "Value", "Citation"],
+    [
+      ["Standard", `${data.rates.standard.value}%`, citeHtml(data.rates.standard.citation)],
+      ["Reduced", `${data.rates.reduced.value}%`, citeHtml(data.rates.reduced.citation)],
+      ["Zero", `${data.rates.zero.value}%`, citeHtml(data.rates.zero.citation)],
+    ]
+  );
+  const liability = kbTable(
+    ["Type", "Taxable supply?", "Input VAT recoverable?", "Examples"],
+    data.liability_types.map((t) => [esc(t.label), t.taxable ? "Yes" : "No", t.allows_input_recovery ? "Yes" : "No", esc((t.examples || []).slice(0, 4).join("; "))])
+  );
+  const blocks = kbTable(
+    ["Category", "Recoverable?", "Reason", "Citation"],
+    data.input_tax_blocks.map((b) => [
+      esc(b.label),
+      b.blocked ? '<span class="badge badge-warn">Blocked</span>' : b.partial_recovery_pct ? `<span class="badge badge-muted">${b.partial_recovery_pct}% only</span>` : '<span class="badge badge-success">Yes</span>',
+      esc(b.reason),
+      citeHtml(b.citation),
+    ])
+  );
+  return `<h3 style="margin:0 0 0.5rem">VAT rates</h3>${rates}
+    <p style="color:var(--text-muted);font-size:0.85rem;margin:1rem 0 0.25rem">Registration threshold: <strong>${fmtMoney(data.registration_threshold?.value, "GBP")}</strong> (${citeHtml(data.registration_threshold?.citation)}) · Deregistration: <strong>${fmtMoney(
+    data.deregistration_threshold?.value,
+    "GBP"
+  )}</strong></p>
+    <h3 style="margin:1.5rem 0 0.5rem">Liability categories</h3>${liability}
+    <h3 style="margin:1.5rem 0 0.5rem">Input tax recovery blocks</h3>${blocks}
+    <p style="color:var(--text-muted);font-size:0.8rem;margin-top:1rem">Input tax claim limit: ${data.admin_rules.input_tax_claim_limit_years.value} years · Record retention: ${
+    data.admin_rules.record_retention_years.value
+  } years · ${esc(data.admin_rules.making_tax_digital.description)}</p>`;
+}
+
+function renderCorpTaxKnowledge(data) {
+  const rc = data.rate_calculation;
+  const calc = `<div class="grid-stats" style="margin-bottom:1rem">
+    <div class="stat-card"><div class="label">Profit</div><div class="value" style="font-size:1.2rem">${fmtMoney(rc.profit, "GBP")}</div></div>
+    <div class="stat-card"><div class="label">Tax due</div><div class="value" style="font-size:1.2rem">${fmtMoney(rc.tax_due, "GBP")}</div></div>
+    <div class="stat-card"><div class="label">Effective rate</div><div class="value" style="font-size:1.2rem">${rc.effective_rate_pct}%</div></div>
+    <div class="stat-card"><div class="label">Band</div><div class="value" style="font-size:1.2rem"><span class="badge badge-muted">${esc(rc.band)}</span></div></div>
+  </div>
+  <p style="color:var(--text-muted);font-size:0.85rem">FY${rc.financial_year} · Small profits rate ${rc.small_profits_rate_pct}% up to ${fmtMoney(rc.lower_limit, "GBP")} · Main rate ${rc.main_rate_pct}% from ${fmtMoney(
+    rc.upper_limit,
+    "GBP"
+  )} · Marginal Relief fraction ${esc(rc.marginal_relief_fraction_label)} · ${citeHtml(rc.citation)}</p>`;
+
+  const ca = data.capital_allowances;
+  const allowances = kbTable(
+    ["Allowance", "Rate", "Citation"],
+    [
+      ["Annual Investment Allowance", fmtMoney(ca.annual_investment_allowance?.value, "GBP"), citeHtml(ca.annual_investment_allowance?.citation)],
+      ["Full expensing — main pool", `${ca.full_expensing_main_pool?.rate_pct ?? "—"}%`, citeHtml(ca.full_expensing_main_pool?.citation)],
+      ["Full expensing — special rate pool", `${ca.full_expensing_special_rate_pool?.rate_pct ?? "—"}%`, citeHtml(ca.full_expensing_special_rate_pool?.citation)],
+      ["First-year allowance (40%)", ca.first_year_allowance_40pct ? `${ca.first_year_allowance_40pct.rate_pct}%` : "Not yet in force on this date", citeHtml(ca.first_year_allowance_40pct?.citation)],
+      ["Writing-down allowance — main pool", `${ca.writing_down_allowance_main_pool.rate_pct}%`, citeHtml(ca.writing_down_allowance_main_pool.citation)],
+      ["Writing-down allowance — special rate pool", `${ca.writing_down_allowance_special_rate_pool.rate_pct}%`, citeHtml(ca.writing_down_allowance_special_rate_pool.citation)],
+      ["Small pools allowance", fmtMoney(ca.small_pools_allowance?.value, "GBP"), citeHtml(ca.small_pools_allowance?.citation)],
+    ]
+  );
+  const disallowable = kbTable(
+    ["Item", "Reason", "Citation"],
+    data.disallowable_expenditure.map((d) => [esc(d.label), esc(d.reason), citeHtml(d.citation)])
+  );
+  return `<h3 style="margin:0 0 0.5rem">Corporation Tax (with Marginal Relief)</h3>${calc}
+    <h3 style="margin:1.5rem 0 0.5rem">Capital allowances</h3>${allowances}
+    <h3 style="margin:1.5rem 0 0.5rem">Disallowable expenditure (add back to profit)</h3>${disallowable}
+    <p style="color:var(--text-muted);font-size:0.8rem;margin-top:1rem">${esc(data.deadlines.payment_small.description)} · ${esc(data.deadlines.return_filing.description)}</p>
+    <p style="color:var(--text-muted);font-size:0.8rem">Director's loan s455 charge: ${data.directors_loan.s455_rate_pct}% — ${esc(data.directors_loan.description)}</p>`;
+}
+
+function renderPayrollKnowledge(data) {
+  const bands = kbTable(
+    ["Band", "Rate", "From", "To"],
+    (data.income_tax_bands?.bands || []).map((b) => [esc(b.name), `${b.rate_pct}%`, fmtMoney(b.from, "GBP"), b.to != null ? fmtMoney(b.to, "GBP") : "—"])
+  );
+  const nic = data.nic;
+  return `<p style="color:var(--text-muted);font-size:0.85rem">Personal Allowance: <strong>${fmtMoney(data.personal_allowance?.value, "GBP")}</strong> (tapered above ${fmtMoney(
+    data.personal_allowance?.taper_threshold,
+    "GBP"
+  )}) — ${citeHtml(data.personal_allowance?.citation)}</p>
+    <h3 style="margin:1.5rem 0 0.5rem">Income Tax bands (${esc(data.income_tax_bands?.region)}, ${esc(data.income_tax_bands?.tax_year)})</h3>${bands}
+    <h3 style="margin:1.5rem 0 0.5rem">National Insurance (Class 1)</h3>
+    ${kbTable(
+      ["Item", "Value"],
+      [
+        ["Lower earnings limit", fmtMoney(nic?.thresholds.lower_earnings_limit, "GBP")],
+        ["Primary threshold", fmtMoney(nic?.thresholds.primary_threshold, "GBP")],
+        ["Secondary threshold", fmtMoney(nic?.thresholds.secondary_threshold, "GBP")],
+        ["Upper earnings limit", fmtMoney(nic?.thresholds.upper_earnings_limit, "GBP")],
+        ["Employee rate (to UEL)", `${nic?.employee_rates[0].rate_pct}%`],
+        ["Employee rate (above UEL)", `${nic?.employee_rates[1].rate_pct}%`],
+        ["Employer rate", `${nic?.employer_rates[0].rate_pct}%`],
+        ["Employment Allowance", fmtMoney(nic?.employment_allowance, "GBP")],
+        ["Class 1A rate (benefits in kind)", `${nic?.class_1a_rate_pct}%`],
+      ]
+    )}
+    <p style="color:var(--text-muted);font-size:0.85rem;margin-top:1rem">Auto-enrolment: trigger ${fmtMoney(data.auto_enrolment?.earnings_trigger, "GBP")}, qualifying band ${fmtMoney(
+    data.auto_enrolment?.qualifying_earnings_lower,
+    "GBP"
+  )}–${fmtMoney(data.auto_enrolment?.qualifying_earnings_upper, "GBP")}, minimum total contribution ${data.auto_enrolment?.minimum_total_contribution_pct}% (employer at least ${
+    data.auto_enrolment?.minimum_employer_contribution_pct
+  }%) — ${citeHtml(data.auto_enrolment?.citation)}</p>
+    <p style="color:var(--text-muted);font-size:0.8rem">${esc(data.obligations.fps.description)} · ${esc(data.obligations.payment_deadline.description)}</p>`;
+}
+
+function renderCisKnowledge(data) {
+  const rates = kbTable(
+    ["Status", "Rate", "Description"],
+    [
+      ["Gross payment status", `${data.deduction_rates.gross.rate_pct}%`, esc(data.deduction_rates.gross.description)],
+      ["Registered", `${data.deduction_rates.registered.rate_pct}%`, esc(data.deduction_rates.registered.description)],
+      ["Unregistered/unmatched", `${data.deduction_rates.unregistered.rate_pct}%`, esc(data.deduction_rates.unregistered.description)],
+    ]
+  );
+  return `<h3 style="margin:0 0 0.5rem">CIS deduction rates</h3>${rates}
+    <p style="color:var(--text-muted);font-size:0.85rem;margin-top:1rem">${esc(data.obligations.monthly_return.description)}</p>
+    <p style="color:var(--text-muted);font-size:0.85rem">${esc(data.obligations.payment_deadline.description)}</p>
+    <h3 style="margin:1.5rem 0 0.5rem">Domestic reverse charge (construction)</h3>
+    <p style="color:var(--text-muted);font-size:0.85rem">${esc(data.domestic_reverse_charge.effect)}</p>`;
+}
+
+function renderExpenseRulesKnowledge(data) {
+  return kbTable(
+    ["Category", "VAT recoverable", "CT deductible", "GL account", "Citation"],
+    data.rules.map((r) => [
+      esc(r.label),
+      r.vat_partial_recovery_pct != null
+        ? `<span class="badge badge-muted">${r.vat_partial_recovery_pct}% only</span>`
+        : r.vat_recoverable === false
+        ? '<span class="badge badge-warn">Blocked</span>'
+        : r.vat_recoverable === true
+        ? '<span class="badge badge-success">Yes</span>'
+        : "—",
+      r.ct_deductible === false ? '<span class="badge badge-warn">No</span>' : '<span class="badge badge-success">Yes</span>',
+      `<strong>${esc(r.gl_account_code)}</strong>`,
+      citeHtml(r.vat_citation || r.ct_citation || r.citation),
+    ])
+  );
+}
+
+async function viewKnowledgeBase() {
+  setTitle("UK Tax Knowledge Base");
+  contentEl().innerHTML = `<div class="card"><div class="card-body">
+    <p style="color:var(--text-muted);margin-top:0">Every rule the ledger, VAT validation, and reports rely on — sourced from gov.uk / legislation.gov.uk, effective-dated so historical invoices are judged against the law that applied then. Click a citation to open the source.</p>
+    <div class="tabs" id="kb-tabs">
+      <button type="button" class="tab active" data-tab="vat">VAT</button>
+      <button type="button" class="tab" data-tab="ct">Corporation Tax</button>
+      <button type="button" class="tab" data-tab="payroll">Payroll</button>
+      <button type="button" class="tab" data-tab="cis">CIS</button>
+      <button type="button" class="tab" data-tab="expense">Expense rules</button>
+    </div>
+    <div class="form-row" style="max-width:260px">
+      <div><label class="field">As of</label><input type="date" id="kb-asof" value="${todayISODate()}"/></div>
+    </div>
+    <button type="button" class="btn btn-primary" id="kb-run">Look up</button>
+    <div id="kb-out" style="margin-top:1.25rem"></div>
+  </div></div>`;
+
+  let active = "vat";
+  $$("#kb-tabs .tab").forEach((t) => {
+    t.onclick = () => {
+      $$("#kb-tabs .tab").forEach((x) => x.classList.remove("active"));
+      t.classList.add("active");
+      active = t.dataset.tab;
+      run();
+    };
+  });
+
+  async function run() {
+    const asOf = $("#kb-asof").value;
+    const out = $("#kb-out");
+    out.innerHTML = "<p>Loading…</p>";
+    try {
+      if (active === "vat") {
+        out.innerHTML = renderVatKnowledge(await api(`/api/knowledge/vat?as_at=${encodeURIComponent(asOf)}`));
+      } else if (active === "ct") {
+        out.innerHTML = renderCorpTaxKnowledge(await api(`/api/knowledge/corporation-tax?as_at=${encodeURIComponent(asOf)}`));
+      } else if (active === "payroll") {
+        out.innerHTML = renderPayrollKnowledge(await api(`/api/knowledge/payroll?as_at=${encodeURIComponent(asOf)}`));
+      } else if (active === "cis") {
+        out.innerHTML = renderCisKnowledge(await api(`/api/knowledge/cis?as_at=${encodeURIComponent(asOf)}`));
+      } else {
+        out.innerHTML = renderExpenseRulesKnowledge(await api("/api/knowledge/expense-rules"));
+      }
+    } catch (e) {
+      out.innerHTML = `<div class="error-banner">${esc(e.message)}</div>`;
+    }
+  }
+
+  $("#kb-run").onclick = run;
+  run();
+}
+
 const VIEWS = {
   "/dashboard": viewDashboard,
+  "/analytics": viewAnalytics,
   "/invoices": viewInvoices,
   "/extract": viewExtract,
   "/assistant": viewAssistant,
@@ -1402,6 +2066,7 @@ const VIEWS = {
   "/trace": viewTrace,
   "/close": viewClose,
   "/query": viewQuery,
+  "/knowledge-base": viewKnowledgeBase,
   "/ai-tax": viewAiTax,
   "/ai-anomaly": viewAiAnomaly,
   "/ai-narrator": viewAiNarrator,

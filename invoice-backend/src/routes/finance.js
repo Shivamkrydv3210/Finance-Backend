@@ -1,18 +1,37 @@
 import { Router } from 'express';
 import { supabase } from '../db.js';
-import { listAccounts, getAccountByCode } from '../services/ledger/accountService.js';
+import { listAccounts, getAccountByCode, getAccountsByIds } from '../services/ledger/accountService.js';
 import { listPeriods, updatePeriodStatus, getPeriodForDate } from '../services/ledger/periodService.js';
-import { createJournalEntry, listJournalEntries, setJournalApproval, postDraftJournal } from '../services/ledger/journalService.js';
+import { createJournalEntry, listJournalEntries, setJournalApproval, postDraftJournal, voidJournalEntry } from '../services/ledger/journalService.js';
 import { postInvoiceToLedger } from '../services/posting/invoicePostingService.js';
 import { trialBalance, profitAndLoss, balanceSheet, taxRegister } from '../services/reports/financialReportService.js';
+import { computeVatReturn, saveVatReturn } from '../services/reports/vatReturnService.js';
+import { verifyManualJournalVat } from '../services/validation/ukValidation.js';
 
 const router = Router();
+
+/** Raw Postgres/PostgREST errors leak schema detail (constraint/column/relation names).
+ * Redact those before they reach the client; our own hand-written validation messages
+ * (the overwhelming majority of what's thrown here) pass through unchanged. */
+function parseId(raw) {
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function safeError(err) {
+  const msg = err?.message || String(err);
+  if (/relation "|column "|constraint "|violates|duplicate key value|syntax error at|permission denied for|pg_\w+/i.test(msg)) {
+    console.error('[finance] internal error:', msg);
+    return 'A database error occurred while processing this request.';
+  }
+  return msg;
+}
 
 router.get('/finance/accounts', async (_req, res) => {
   try {
     res.json({ accounts: await listAccounts(true) });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
   }
 });
 
@@ -20,17 +39,19 @@ router.get('/finance/periods', async (_req, res) => {
   try {
     res.json({ periods: await listPeriods(36) });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
   }
 });
 
 router.patch('/finance/periods/:periodId/status', async (req, res) => {
   try {
+    const periodId = parseId(req.params.periodId);
+    if (periodId == null) return res.status(400).json({ error: 'Invalid periodId' });
     const { status } = req.body || {};
-    const row = await updatePeriodStatus(Number(req.params.periodId), status);
+    const row = await updatePeriodStatus(periodId, status);
     res.json(row);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
   }
 });
 
@@ -40,7 +61,7 @@ router.get('/finance/reports/trial-balance', async (req, res) => {
     if (!from || !to) return res.status(400).json({ error: 'from and to query params required (YYYY-MM-DD)' });
     res.json({ report: 'trial_balance', rows: await trialBalance(from, to) });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
   }
 });
 
@@ -50,7 +71,7 @@ router.get('/finance/reports/pl', async (req, res) => {
     if (!from || !to) return res.status(400).json({ error: 'from and to required' });
     res.json(await profitAndLoss(from, to));
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
   }
 });
 
@@ -60,7 +81,7 @@ router.get('/finance/reports/balance-sheet', async (req, res) => {
     if (!as_of) return res.status(400).json({ error: 'as_of required' });
     res.json(await balanceSheet(as_of));
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
   }
 });
 
@@ -70,7 +91,23 @@ router.get('/finance/reports/tax-register', async (req, res) => {
     if (!from || !to) return res.status(400).json({ error: 'from and to required' });
     res.json({ report: 'tax_register', rows: await taxRegister(from, to) });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
+  }
+});
+
+/** UK VAT return, Boxes 1–9, with the journal lines behind every box. `save=true` persists a draft. */
+router.get('/finance/reports/vat-return', async (req, res) => {
+  try {
+    const { from, to, save } = req.query;
+    if (!from || !to) return res.status(400).json({ error: 'from and to required' });
+    const computed = await computeVatReturn(from, to);
+    if (save === 'true') {
+      const saved = await saveVatReturn(computed);
+      return res.json({ ...computed, ...saved });
+    }
+    res.json(computed);
+  } catch (err) {
+    res.status(400).json({ error: safeError(err) });
   }
 });
 
@@ -85,19 +122,19 @@ router.get('/finance/reports/export-pack', async (req, res) => {
       period: { from, to },
       trial_balance: tb,
       tax_register: tax,
-      localization_note: 'Map tax_scheme values to return lines in country-specific exporters (e.g. India GST).',
+      localization_note: 'tax_scheme values (uk_vat_standard/reduced/zero, uk_vat_blocked) map directly onto UK VAT return boxes — see /api/knowledge/vat for the current rates and rules.',
     });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
   }
 });
 
 router.get('/finance/journals', async (req, res) => {
   try {
     const { from, to, limit } = req.query;
-    res.json({ entries: await listJournalEntries({ fromDate: from, toDate: to, limit: limit ? Number(limit) : 100 }) });
+    res.json(await listJournalEntries({ fromDate: from, toDate: to, limit: limit ? Number(limit) : 100 }));
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
   }
 });
 
@@ -136,6 +173,20 @@ router.post('/finance/journals', async (req, res) => {
       });
     }
 
+    // Manual journals skip the invoice-extraction pipeline entirely, so none of the
+    // per-invoice VAT arithmetic checks would otherwise apply to them. Resolve each
+    // line's account code and re-run the same net*rate=VAT check against any line
+    // touching a VAT account (1310/2110/2120); if it fails, force the entry to
+    // pending approval instead of rejecting it outright — same "flag, don't silently
+    // trust" philosophy used for AI-extracted invoices.
+    const accMap = await getAccountsByIds(resolved.map((l) => l.account_id));
+    const vatCheck = verifyManualJournalVat(
+      resolved.map((l) => ({ ...l, account_code: accMap[l.account_id]?.code || null })),
+      entry_date
+    );
+    const requestedAutoApprove = auto_approve !== false;
+    const skipApproval = requestedAutoApprove && (!vatCheck.touchesVat || vatCheck.allValid);
+
     const result = await createJournalEntry(
       {
         entry_date,
@@ -147,46 +198,66 @@ router.post('/finance/journals', async (req, res) => {
         created_by: created_by || 'api',
         lines: resolved,
       },
-      { skipApproval: auto_approve !== false }
+      { skipApproval }
     );
 
-    res.json(result);
+    res.json({ ...result, vat_check: vatCheck.touchesVat ? vatCheck : undefined });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
   }
 });
 
 router.post('/finance/invoices/:invoiceId/post-ledger', async (req, res) => {
   try {
-    const id = Number(req.params.invoiceId);
+    const id = parseId(req.params.invoiceId);
+    if (id == null) return res.status(400).json({ error: 'Invalid invoiceId' });
     const { data: inv, error } = await supabase.from('invoice_header').select('*').eq('invoice_id', id).single();
     if (error || !inv) return res.status(404).json({ error: 'Invoice not found' });
     const out = await postInvoiceToLedger(id, inv, { actor: req.body?.actor || 'api' });
     res.json(out);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
   }
 });
 
 router.patch('/finance/journals/:journalEntryId/approval', async (req, res) => {
   try {
+    const journalEntryId = parseId(req.params.journalEntryId);
+    if (journalEntryId == null) return res.status(400).json({ error: 'Invalid journalEntryId' });
     const { approval_status, actor } = req.body || {};
-    const row = await setJournalApproval(Number(req.params.journalEntryId), {
+    const row = await setJournalApproval(journalEntryId, {
       approval_status,
       actor: actor || 'api',
     });
     res.json(row);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
   }
 });
 
 router.post('/finance/journals/:journalEntryId/post', async (req, res) => {
   try {
-    const row = await postDraftJournal(Number(req.params.journalEntryId), req.body?.actor || 'api');
+    const journalEntryId = parseId(req.params.journalEntryId);
+    if (journalEntryId == null) return res.status(400).json({ error: 'Invalid journalEntryId' });
+    const row = await postDraftJournal(journalEntryId, req.body?.actor || 'api');
     res.json(row);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeError(err) });
+  }
+});
+
+// POST /finance/journals/:journalEntryId/void - body: { reason, actor? }
+// Reverses a posted entry with a new, linked, opposite-signed journal (never edits/deletes
+// the original) — the compliant correction pattern under Companies Act 2006 s.386-388.
+router.post('/finance/journals/:journalEntryId/void', async (req, res) => {
+  try {
+    const journalEntryId = parseId(req.params.journalEntryId);
+    if (journalEntryId == null) return res.status(400).json({ error: 'Invalid journalEntryId' });
+    const { reason, actor } = req.body || {};
+    const result = await voidJournalEntry(journalEntryId, { reason, actor: actor || 'api' });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: safeError(err) });
   }
 });
 

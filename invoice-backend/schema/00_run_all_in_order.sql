@@ -344,6 +344,224 @@ CREATE TABLE IF NOT EXISTS fixed_assets (
 
 CREATE INDEX IF NOT EXISTS idx_fixed_assets_acq ON fixed_assets (acquisition_date);
 
+-- ─── 09_uk_invoice_accuracy.sql ────────────────────────────────────────────
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='vat_number') THEN
+    ALTER TABLE vendors ADD COLUMN vat_number TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='company_registration_number') THEN
+    ALTER TABLE vendors ADD COLUMN company_registration_number TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='sort_code') THEN
+    ALTER TABLE vendors ADD COLUMN sort_code VARCHAR(8);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='account_number_last4') THEN
+    ALTER TABLE vendors ADD COLUMN account_number_last4 VARCHAR(4);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='address_line1') THEN
+    ALTER TABLE vendors ADD COLUMN address_line1 TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='address_line2') THEN
+    ALTER TABLE vendors ADD COLUMN address_line2 TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='town') THEN
+    ALTER TABLE vendors ADD COLUMN town TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='county') THEN
+    ALTER TABLE vendors ADD COLUMN county TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='postcode') THEN
+    ALTER TABLE vendors ADD COLUMN postcode VARCHAR(10);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='vendors' AND column_name='vat_number_valid') THEN
+    ALTER TABLE vendors ADD COLUMN vat_number_valid BOOLEAN;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_vendors_vat_number ON vendors (vat_number);
+CREATE INDEX IF NOT EXISTS idx_vendors_crn ON vendors (company_registration_number);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='invoice_header' AND column_name='extraction_confidence') THEN
+    ALTER TABLE invoice_header ADD COLUMN extraction_confidence NUMERIC(4,3);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='invoice_header' AND column_name='validation_status') THEN
+    ALTER TABLE invoice_header ADD COLUMN validation_status VARCHAR(20) NOT NULL DEFAULT 'validated'
+      CHECK (validation_status IN ('validated', 'pending_review', 'rejected'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='invoice_header' AND column_name='validation_flags') THEN
+    ALTER TABLE invoice_header ADD COLUMN validation_flags JSONB NOT NULL DEFAULT '[]';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='invoice_header' AND column_name='content_hash') THEN
+    ALTER TABLE invoice_header ADD COLUMN content_hash TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='invoice_header' AND column_name='vat_number') THEN
+    ALTER TABLE invoice_header ADD COLUMN vat_number TEXT;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_invoice_header_content_hash ON invoice_header (content_hash);
+CREATE INDEX IF NOT EXISTS idx_invoice_header_validation_status ON invoice_header (validation_status);
+
+CREATE TABLE IF NOT EXISTS invoice_vat_lines (
+  vat_line_id          BIGSERIAL PRIMARY KEY,
+  invoice_id           BIGINT NOT NULL REFERENCES invoice_header(invoice_id) ON DELETE CASCADE,
+  rate_type            VARCHAR(16) NOT NULL
+                        CHECK (rate_type IN ('standard', 'reduced', 'zero', 'exempt', 'non_standard')),
+  rate_pct             NUMERIC(5,2) NOT NULL DEFAULT 0,
+  net_amount           NUMERIC(14,2) NOT NULL DEFAULT 0,
+  vat_amount           NUMERIC(14,2) NOT NULL DEFAULT 0,
+  expected_vat_amount  NUMERIC(14,2),
+  is_valid             BOOLEAN NOT NULL DEFAULT TRUE,
+  variance             NUMERIC(14,2) DEFAULT 0,
+  created_at           TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_invoice_vat_lines_invoice ON invoice_vat_lines (invoice_id);
+
+-- ─── 10_uk_statutory_coa.sql ────────────────────────────────────────────────
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='statutory_heading') THEN
+    ALTER TABLE accounts ADD COLUMN statutory_heading TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='statutory_sort_order') THEN
+    ALTER TABLE accounts ADD COLUMN statutory_sort_order INT NOT NULL DEFAULT 0;
+  END IF;
+END $$;
+
+UPDATE accounts SET statutory_heading = 'Current assets - Cash at bank and in hand' WHERE code IN ('1000', '1100') AND statutory_heading IS NULL;
+UPDATE accounts SET statutory_heading = 'Current assets - Debtors' WHERE code IN ('1200', '1310') AND statutory_heading IS NULL;
+UPDATE accounts SET statutory_heading = 'Creditors: amounts falling due within one year' WHERE code IN ('2000', '2110') AND statutory_heading IS NULL;
+UPDATE accounts SET statutory_heading = 'Capital and reserves' WHERE code = '3000' AND statutory_heading IS NULL;
+UPDATE accounts SET statutory_heading = 'Turnover' WHERE code = '4000' AND statutory_heading IS NULL;
+UPDATE accounts SET statutory_heading = 'Administrative expenses' WHERE code IN ('5100', '5200', '5300', '5400', '5900') AND statutory_heading IS NULL;
+
+INSERT INTO accounts (code, name, account_type, default_tax_scheme, statutory_heading, statutory_sort_order) VALUES
+  ('1500', 'Tangible fixed assets (cost)', 'asset', NULL, 'Fixed assets - Tangible', 10),
+  ('1590', 'Accumulated depreciation — tangible assets', 'asset', NULL, 'Fixed assets - Tangible', 20),
+  ('2120', 'VAT control account', 'liability', NULL, 'Creditors: amounts falling due within one year', 30),
+  ('2200', 'Corporation tax payable', 'liability', NULL, 'Creditors: amounts falling due within one year', 40),
+  ('8000', 'Corporation tax', 'expense', NULL, 'Taxation', 10),
+  ('2300', 'PAYE & National Insurance control account', 'liability', NULL, 'Creditors: amounts falling due within one year', 50),
+  ('2310', 'Pension contributions payable', 'liability', NULL, 'Creditors: amounts falling due within one year', 60),
+  ('6000', 'Staff costs — wages and salaries', 'expense', NULL, 'Administrative expenses', 10),
+  ('6010', 'Staff costs — employer''s NIC', 'expense', NULL, 'Administrative expenses', 20),
+  ('6020', 'Staff costs — pension contributions', 'expense', NULL, 'Administrative expenses', 30),
+  ('6030', 'Directors'' remuneration', 'expense', NULL, 'Administrative expenses', 40),
+  ('2400', 'Director''s loan account', 'liability', NULL, 'Creditors: amounts falling due within one year', 70),
+  ('3100', 'Called up share capital', 'equity', NULL, 'Capital and reserves', 10),
+  ('3200', 'Share premium account', 'equity', NULL, 'Capital and reserves', 20),
+  ('5000', 'Cost of sales — purchases', 'expense', NULL, 'Cost of sales', 10),
+  ('6100', 'Rent and rates', 'expense', NULL, 'Administrative expenses', 50),
+  ('6110', 'Light and heat', 'expense', NULL, 'Administrative expenses', 60),
+  ('6120', 'Insurance', 'expense', NULL, 'Administrative expenses', 70),
+  ('6130', 'Repairs and renewals', 'expense', NULL, 'Administrative expenses', 80),
+  ('6140', 'Motor expenses', 'expense', NULL, 'Administrative expenses', 90),
+  ('6150', 'Travel and subsistence', 'expense', NULL, 'Administrative expenses', 100),
+  ('6160', 'Telephone and IT', 'expense', NULL, 'Administrative expenses', 110),
+  ('6170', 'Printing, postage and stationery', 'expense', NULL, 'Administrative expenses', 120),
+  ('6180', 'Legal and professional fees', 'expense', NULL, 'Administrative expenses', 130),
+  ('6190', 'Accountancy fees', 'expense', NULL, 'Administrative expenses', 140),
+  ('6200', 'Bank charges', 'expense', NULL, 'Administrative expenses', 150),
+  ('6210', 'Subscriptions', 'expense', NULL, 'Administrative expenses', 160),
+  ('6220', 'Depreciation', 'expense', NULL, 'Administrative expenses', 170),
+  ('6900', 'Sundry/general expenses', 'expense', NULL, 'Administrative expenses', 999),
+  ('7000', 'Interest payable', 'expense', NULL, 'Interest payable and similar charges', 10)
+ON CONFLICT (code) DO NOTHING;
+
+-- ─── 11_journal_controls.sql ────────────────────────────────────────────────
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='journal_entries' AND column_name='voided_at') THEN
+    ALTER TABLE journal_entries ADD COLUMN voided_at TIMESTAMPTZ;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='journal_entries' AND column_name='reversed_by_journal_entry_id') THEN
+    ALTER TABLE journal_entries ADD COLUMN reversed_by_journal_entry_id BIGINT REFERENCES journal_entries(journal_entry_id);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='journal_entries' AND column_name='reverses_journal_entry_id') THEN
+    ALTER TABLE journal_entries ADD COLUMN reverses_journal_entry_id BIGINT REFERENCES journal_entries(journal_entry_id);
+  END IF;
+END $$;
+
+DO $$
+DECLARE
+  cname text;
+BEGIN
+  SELECT con.conname INTO cname
+  FROM pg_constraint con
+  JOIN pg_class rel ON rel.oid = con.conrelid
+  WHERE rel.relname = 'journal_entries' AND con.contype = 'c' AND pg_get_constraintdef(con.oid) LIKE '%source_type%';
+  IF cname IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE journal_entries DROP CONSTRAINT %I', cname);
+  END IF;
+END $$;
+
+ALTER TABLE journal_entries ADD CONSTRAINT journal_entries_source_type_check
+  CHECK (source_type IN ('manual', 'invoice', 'bank', 'system', 'reconciliation', 'reversal'));
+
+CREATE INDEX IF NOT EXISTS idx_journal_entries_reverses ON journal_entries (reverses_journal_entry_id);
+
+-- ─── 12_uk_tax_kb.sql ───────────────────────────────────────────────────────
+INSERT INTO accounts (code, name, account_type, default_tax_scheme, statutory_heading, statutory_sort_order) VALUES
+  ('6250', 'Irrecoverable VAT', 'expense', NULL, 'Administrative expenses', 180)
+ON CONFLICT (code) DO NOTHING;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='invoice_header' AND column_name='expense_category') THEN
+    ALTER TABLE invoice_header ADD COLUMN expense_category TEXT;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_invoice_header_expense_category ON invoice_header (expense_category);
+
+ALTER TABLE invoice_header ALTER COLUMN currency SET DEFAULT 'GBP';
+ALTER TABLE journal_lines ALTER COLUMN currency_code SET DEFAULT 'GBP';
+
+-- ─── 13_vat_return.sql ──────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS vat_returns (
+  vat_return_id  BIGSERIAL PRIMARY KEY,
+  period_from    DATE NOT NULL,
+  period_to      DATE NOT NULL,
+  box_1          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_2          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_3          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_4          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_5          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_6          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_7          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_8          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_9          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  status         VARCHAR(20) NOT NULL DEFAULT 'draft'
+                 CHECK (status IN ('draft', 'finalised', 'submitted')),
+  content_hash   TEXT,
+  computed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finalised_at   TIMESTAMPTZ,
+  notes          TEXT,
+  UNIQUE (period_from, period_to)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vat_returns_period ON vat_returns (period_from, period_to);
+
+CREATE TABLE IF NOT EXISTS vat_return_lines (
+  vat_return_line_id BIGSERIAL PRIMARY KEY,
+  vat_return_id      BIGINT NOT NULL REFERENCES vat_returns(vat_return_id) ON DELETE CASCADE,
+  box                SMALLINT NOT NULL CHECK (box >= 1 AND box <= 9),
+  journal_line_id    BIGINT REFERENCES journal_lines(journal_line_id) ON DELETE SET NULL,
+  journal_entry_id   BIGINT REFERENCES journal_entries(journal_entry_id) ON DELETE SET NULL,
+  account_code       VARCHAR(32),
+  tax_scheme         VARCHAR(64),
+  amount             NUMERIC(14,2) NOT NULL DEFAULT 0,
+  entry_date         DATE,
+  description        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_vat_return_lines_return ON vat_return_lines (vat_return_id, box);
+CREATE INDEX IF NOT EXISTS idx_vat_return_lines_journal ON vat_return_lines (journal_line_id);
+
 -- =============================================================================
 -- Done. Optional: SELECT * FROM accounts ORDER BY code; SELECT * FROM fiscal_periods;
 -- =============================================================================

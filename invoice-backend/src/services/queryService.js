@@ -11,7 +11,7 @@ invoice_header columns:
   invoice_id (bigint PK), vendor_id (bigint FK), vendor_name (text),
   invoice_number (text), invoice_date (date), due_date (date),
   category (text: fuel | maintenance | repair | parts | other),
-  currency (text: INR | USD), subtotal (numeric), tax_amount (numeric),
+  currency (text: GBP default | INR | USD), subtotal (numeric), tax_amount (numeric),
   total_amount (numeric), payment_mode (text), invoice_type (text),
   notes (text), file_url (text), source (text), created_at (timestamptz),
   journal_entry_id (bigint), ledger_posted_at (timestamptz), posting_error (text)

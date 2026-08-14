@@ -1,6 +1,6 @@
 import { supabase } from '../../db.js';
 
-export async function createBankAccount({ name, currency_code = 'INR', gl_account_code = '1100', last_four }) {
+export async function createBankAccount({ name, currency_code = 'GBP', gl_account_code = '1100', last_four }) {
   const { data: acc } = await supabase.from('accounts').select('account_id').eq('code', gl_account_code).single();
   if (!acc) throw new Error(`GL account ${gl_account_code} not found`);
   const { data, error } = await supabase

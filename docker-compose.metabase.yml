@@ -1,0 +1,34 @@
+# Metabase OSS — free BI for Finance Console analytics
+# Docs: docs/METABASE.md
+#
+# UI: http://localhost:3000  (API app uses 3001 by default)
+#
+# Start: docker compose -f docker-compose.metabase.yml up -d
+
+services:
+  metabase:
+    image: metabase/metabase:latest
+    container_name: finance-metabase
+    ports:
+      - "3000:3000"
+    environment:
+      MB_JETTY_PORT: 3000
+      # Optional: persist Metabase app DB in Postgres instead of H2
+      # MB_DB_TYPE: postgres
+      # MB_DB_DBNAME: metabase
+      # MB_DB_PORT: 5432
+      # MB_DB_USER: metabase
+      # MB_DB_PASS: metabase
+      # MB_DB_HOST: metabase-db
+    volumes:
+      - metabase-data:/metabase-data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+volumes:
+  metabase-data:

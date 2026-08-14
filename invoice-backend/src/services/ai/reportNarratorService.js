@@ -71,7 +71,7 @@ RULES:
 - If prior-period data is available, include period-over-period comparison with percentage changes
 - Flag any concerns or risks (negative trends, concentration, unusual items)
 - End with 2-3 actionable recommendations
-- Use INR currency formatting (e.g., "INR 18.4 lakhs" for large amounts, use lakhs/crores for Indian context)
+- Use GBP currency formatting (e.g., "£18,400" or "£1.2m" for large amounts)
 - Be specific — reference actual account names, vendor names, amounts
 - Keep it concise but comprehensive (400-600 words)
 - Do NOT use markdown headers — use plain paragraphs with bold for emphasis

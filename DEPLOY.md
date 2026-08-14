@@ -66,6 +66,13 @@ For local development only, leave it as `''` so the browser uses the same origin
 3. Build command: leave blank (static site).
 4. Deploy, then confirm the site loads and the API status in the header is OK.
 
+**No GitHub (manual deploy):** Netlify → **Add new site** → **Deploy manually**. Drag either:
+
+- the folder **`invoice-backend/public`** from this repo (must contain `index.html` at the top of that folder), or  
+- a zip of **the contents** of `public` (so `index.html` is at the root of the zip).
+
+Regenerate a zip from the repo: `cd invoice-backend/public && zip -r ../finance-console-netlify.zip .` — output is **`invoice-backend/finance-console-netlify.zip`** (gitignored). Before zipping, set `window.__INVOICE_API_BASE__` in `js/api-config.js` to your live API URL.
+
 More detail: [`invoice-backend/docs/FRONTEND_DEPLOY.md`](invoice-backend/docs/FRONTEND_DEPLOY.md).
 
 ### Alternative: one URL only
@@ -91,4 +98,15 @@ If you **only** deploy the Render web service, Express already serves `public/` 
 | [`invoice-backend/package.json`](invoice-backend/package.json) | `engines.node` for a consistent Node version |
 | [`netlify.toml`](netlify.toml) | Netlify publish dir from repo root |
 | [`invoice-backend/netlify.toml`](invoice-backend/netlify.toml) | Netlify when base dir is `invoice-backend` |
-| [`invoice-backend/public/js/api-config.js`](invoice-backend/public/js/api-config.js) | Production API base URL for split hosting |
+| [`invoice-backend/public/js/api-config.js`](invoice-backend/public/js/api-config.js) | Production API base URL for split hosting; optional `__METABASE_URL__` / `__METABASE_EMBED_URL__` |
+| [`docker-compose.metabase.yml`](docker-compose.metabase.yml) | Local Metabase OSS (port 3000); see [`docs/METABASE.md`](docs/METABASE.md) |
+
+---
+
+## 5. Optional: Metabase BI
+
+Chart.js analytics ship with the Finance Console (no extra service). For deeper BI and Metabot AI against Supabase Postgres:
+
+1. Follow [`docs/METABASE.md`](docs/METABASE.md).
+2. Set `window.__METABASE_URL__` and optionally `window.__METABASE_EMBED_URL__` in `api-config.js`.
+3. Do not put `SUPABASE_SERVICE_ROLE_KEY` into Metabase — use the database password / `DATABASE_URL` only.
