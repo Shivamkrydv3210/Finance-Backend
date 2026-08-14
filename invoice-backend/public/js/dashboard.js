@@ -244,8 +244,9 @@ async function viewAnalyticsDashboard(pageTitle) {
   chartDefaults();
 
   const periodParam = getHashQuery().get("period") || "";
-  const metabaseUrl = String(window.__METABASE_URL__ || "").replace(/\/$/, "");
-  const metabaseEmbed = String(window.__METABASE_EMBED_URL__ || "").trim();
+  // Metabase wiring disabled for now
+  // const metabaseUrl = String(window.__METABASE_URL__ || "").replace(/\/$/, "");
+  // const metabaseEmbed = String(window.__METABASE_EMBED_URL__ || "").trim();
 
   contentEl().innerHTML = `
     <div id="dash-msg"></div>
@@ -291,26 +292,23 @@ async function viewAnalyticsDashboard(pageTitle) {
           <div id="dash-ai-out" style="margin-top:1rem"></div>
         </div>
       </div>
+      <!--
       <div class="card">
         <div class="card-header">
           <h2>Metabase BI</h2>
-          ${metabaseUrl ? `<a class="btn btn-ghost btn-sm" href="${esc(metabaseUrl)}" target="_blank" rel="noopener">Open Metabase</a>` : ""}
         </div>
         <div class="card-body">
           <p style="color:var(--text-muted);margin-top:0">
             Free self-hosted BI against Supabase. Use <strong>Metabot</strong> inside Metabase for AI Q&amp;A.
             Setup: <code>docs/METABASE.md</code>.
           </p>
-          ${
-            metabaseEmbed
-              ? `<div class="metabase-embed-wrap"><iframe class="metabase-embed" title="Metabase dashboard" src="${esc(metabaseEmbed)}" allowtransparency></iframe></div>`
-              : `<div class="empty-state metabase-placeholder">
-                   Set <code>window.__METABASE_EMBED_URL__</code> in <code>js/api-config.js</code> to a public/guest embed URL,
-                   or open Metabase and ask Metabot about invoices and spend.
-                 </div>`
-          }
+          <div class="empty-state metabase-placeholder">
+            Set <code>window.__METABASE_EMBED_URL__</code> in <code>js/api-config.js</code> to a public/guest embed URL,
+            or open Metabase and ask Metabot about invoices and spend.
+          </div>
         </div>
       </div>
+      -->
     </div>`;
 
   const applyPeriod = () => {
