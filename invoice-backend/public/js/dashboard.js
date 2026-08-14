@@ -39,7 +39,7 @@ function esc(s) {
     .replace(/"/g, "&quot;");
 }
 
-function fmtMoney(n, cur = "INR") {
+function fmtMoney(n, cur = "GBP") {
   const x = Number(n);
   if (Number.isNaN(x)) return "—";
   return `${cur} ${x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -62,6 +62,7 @@ function lastOfMonth() {
 
 const ROUTES = [
   { path: "/dashboard", label: "Overview", section: "Core" },
+  { path: "/analytics", label: "Analytics", section: "Core" },
   { path: "/invoices", label: "Invoices", section: "Core" },
   { path: "/extract", label: "Extract URL", section: "Core" },
   { path: "/assistant", label: "AI Assistant", section: "Core" },
@@ -80,6 +81,39 @@ const ROUTES = [
   { path: "/ai-vendor", label: "Vendor AI", section: "AI Intelligence" },
   { path: "/ai-compliance", label: "AI Compliance", section: "AI Intelligence" },
 ];
+
+/** Chart.js instances to destroy on re-render */
+let analyticsCharts = [];
+
+const CHART_PALETTE = [
+  "#2563eb",
+  "#059669",
+  "#d97706",
+  "#7c3aed",
+  "#dc2626",
+  "#0891b2",
+  "#db2777",
+  "#65a30d",
+];
+
+function destroyAnalyticsCharts() {
+  analyticsCharts.forEach((c) => {
+    try {
+      c.destroy();
+    } catch {
+      /* ignore */
+    }
+  });
+  analyticsCharts = [];
+}
+
+function chartDefaults() {
+  if (typeof Chart === "undefined") return;
+  Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+  Chart.defaults.color = "#64748b";
+  Chart.defaults.plugins.legend.labels.boxWidth = 12;
+  Chart.defaults.plugins.legend.labels.padding = 12;
+}
 
 function getRoute() {
   let h = (location.hash || "#/dashboard").replace(/^#/, "") || "/dashboard";
@@ -117,6 +151,7 @@ function renderNav() {
 function iconFor(path) {
   const icons = {
     "/dashboard": svgHome(),
+    "/analytics": svgChart(),
     "/invoices": svgDoc(),
     "/extract": svgLink(),
     "/assistant": svgChat(),
@@ -196,32 +231,277 @@ function svgLibrary() {
 const contentEl = () => $("#main-content");
 
 async function viewDashboard() {
-  setTitle("Overview");
-  const wrap = document.createElement("div");
-  wrap.innerHTML = `<div id="dash-msg"></div>
+  return viewAnalyticsDashboard("Overview");
+}
+
+async function viewAnalytics() {
+  return viewAnalyticsDashboard("Analytics");
+}
+
+async function viewAnalyticsDashboard(pageTitle) {
+  setTitle(pageTitle);
+  destroyAnalyticsCharts();
+  chartDefaults();
+
+  const periodParam = getHashQuery().get("period") || "";
+  const metabaseUrl = String(window.__METABASE_URL__ || "").replace(/\/$/, "");
+  const metabaseEmbed = String(window.__METABASE_EMBED_URL__ || "").trim();
+
+  contentEl().innerHTML = `
+    <div id="dash-msg"></div>
+    <div class="card analytics-toolbar">
+      <div class="card-body analytics-toolbar-row">
+        <div>
+          <label class="field" for="dash-period">Period filter</label>
+          <input type="text" id="dash-period" placeholder="all time · e.g. 2025 or 2025-07" value="${esc(periodParam)}" />
+        </div>
+        <div class="analytics-toolbar-actions">
+          <button type="button" class="btn btn-primary" id="dash-apply">Apply</button>
+          <button type="button" class="btn btn-secondary" id="dash-clear">Clear</button>
+          <a class="btn btn-secondary" href="#/invoices">New invoice</a>
+          <a class="btn btn-secondary" href="#/extract">Extract URL</a>
+          <a class="btn btn-secondary" href="#/reports">Reports</a>
+        </div>
+      </div>
+    </div>
     <div class="grid-stats" id="dash-stats"></div>
-    <div class="card"><div class="card-header"><h2>Quick actions</h2></div><div class="card-body">
-      <a class="btn btn-primary" href="#/invoices">New invoice</a>
-      <a class="btn btn-secondary" href="#/extract">Extract from URL</a>
-      <a class="btn btn-secondary" href="#/reports">View reports</a>
-      <a class="btn btn-secondary" href="#/trace">Money Trace</a>
-    </div></div>`;
-  contentEl().innerHTML = "";
-  contentEl().appendChild(wrap);
+    <div class="analytics-charts" id="dash-charts">
+      <div class="card chart-card">
+        <div class="card-header"><h2>Spend by month</h2></div>
+        <div class="card-body chart-body"><canvas id="chart-month" aria-label="Monthly spend line chart"></canvas></div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-header"><h2>Spend by category</h2></div>
+        <div class="card-body chart-body"><canvas id="chart-category" aria-label="Category doughnut chart"></canvas></div>
+      </div>
+      <div class="card chart-card chart-card-wide">
+        <div class="card-header"><h2>Top vendors</h2></div>
+        <div class="card-body chart-body"><canvas id="chart-vendors" aria-label="Top vendors bar chart"></canvas></div>
+      </div>
+    </div>
+    <div class="analytics-ai-row">
+      <div class="card">
+        <div class="card-header">
+          <h2>AI insight (this month)</h2>
+          <a class="btn btn-ghost btn-sm" href="#/ai-narrator">Full AI Report Insights</a>
+        </div>
+        <div class="card-body">
+          <p style="color:var(--text-muted);margin-top:0">Uses your existing OpenAI report narrator on P&amp;L for the current month.</p>
+          <button type="button" class="btn btn-primary" id="dash-ai-run">Explain this month</button>
+          <div id="dash-ai-out" style="margin-top:1rem"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <h2>Metabase BI</h2>
+          ${metabaseUrl ? `<a class="btn btn-ghost btn-sm" href="${esc(metabaseUrl)}" target="_blank" rel="noopener">Open Metabase</a>` : ""}
+        </div>
+        <div class="card-body">
+          <p style="color:var(--text-muted);margin-top:0">
+            Free self-hosted BI against Supabase. Use <strong>Metabot</strong> inside Metabase for AI Q&amp;A.
+            Setup: <code>docs/METABASE.md</code>.
+          </p>
+          ${
+            metabaseEmbed
+              ? `<div class="metabase-embed-wrap"><iframe class="metabase-embed" title="Metabase dashboard" src="${esc(metabaseEmbed)}" allowtransparency></iframe></div>`
+              : `<div class="empty-state metabase-placeholder">
+                   Set <code>window.__METABASE_EMBED_URL__</code> in <code>js/api-config.js</code> to a public/guest embed URL,
+                   or open Metabase and ask Metabot about invoices and spend.
+                 </div>`
+          }
+        </div>
+      </div>
+    </div>`;
+
+  const applyPeriod = () => {
+    const p = ($("#dash-period")?.value || "").trim();
+    const base = getRoute() === "/analytics" ? "/analytics" : "/dashboard";
+    location.hash = p ? `#${base}?period=${encodeURIComponent(p)}` : `#${base}`;
+  };
+  $("#dash-apply").onclick = applyPeriod;
+  $("#dash-period").onkeydown = (e) => {
+    if (e.key === "Enter") applyPeriod();
+  };
+  $("#dash-clear").onclick = () => {
+    const base = getRoute() === "/analytics" ? "/analytics" : "/dashboard";
+    location.hash = `#${base}`;
+  };
+
+  $("#dash-ai-run").onclick = async () => {
+    const out = $("#dash-ai-out");
+    out.innerHTML = aiLoadingCard("this month's P&L");
+    try {
+      const data = await api("/api/ai/narrate-report", {
+        method: "POST",
+        body: JSON.stringify({
+          report_type: "pl",
+          from: firstOfMonth(),
+          to: lastOfMonth(),
+          as_of: lastOfMonth(),
+        }),
+      });
+      const n = data.narrative || {};
+      const insights = (n.key_insights || []).slice(0, 3);
+      out.innerHTML = `
+        <div class="ai-insight-box">
+          <p><strong>Summary:</strong> ${esc(n.executive_summary || "No summary returned.")}</p>
+        </div>
+        ${
+          insights.length
+            ? `<div class="ai-insight-item-list">${insights
+                .map(
+                  (i) =>
+                    `<div class="ai-insight-item"><strong>${esc(i.title)}</strong><p>${esc(i.detail)}</p></div>`
+                )
+                .join("")}</div>`
+            : ""
+        }
+        ${(n.recommendations || []).length ? `<p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:0"><a href="#/ai-narrator">See full recommendations →</a></p>` : ""}`;
+    } catch (e) {
+      out.innerHTML = `<div class="error-banner">${esc(e.message)}</div>`;
+    }
+  };
+
   const msg = $("#dash-msg");
-  const stats = $("#dash-stats");
+  const statsEl = $("#dash-stats");
   try {
-    const s = await api("/api/stats");
+    const qs = periodParam ? `?period=${encodeURIComponent(periodParam)}` : "";
+    const s = await api(`/api/stats${qs}`);
     const byCat = s.by_category || {};
-    const inr = s.inr_total != null ? fmtMoney(s.inr_total, "INR") : "—";
-    const usd = s.usd_total ? ` · USD ${Number(s.usd_total).toLocaleString()}` : "";
-    stats.innerHTML = `
-      <div class="stat-card"><div class="label">Total invoices</div><div class="value">${esc(s.total_invoices ?? "—")}</div></div>
-      <div class="stat-card"><div class="label">Totals (INR)</div><div class="value" style="font-size:1.05rem">${esc(inr)}${esc(usd)}</div></div>
-      <div class="stat-card"><div class="label">Categories</div><div class="value" style="font-size:1rem">${esc(Object.keys(byCat).length)}</div></div>`;
+    const topVendor = s.top_5_vendors?.[0];
+    const base = s.base_currency || "GBP";
+    const byCurrency = s.by_currency || {};
+    const gbp = fmtMoney(s.gbp_total || 0, base);
+    const otherCurrencies = Object.entries(byCurrency).filter(([code]) => code !== base);
+    const otherSpend = otherCurrencies.length
+      ? otherCurrencies.map(([code, v]) => fmtMoney(v.total, code)).join(" · ")
+      : "—";
+
+    statsEl.innerHTML = `
+      <div class="stat-card"><div class="label">Total invoices</div><div class="value">${esc(s.total_invoices ?? "—")}</div>
+        <div class="stat-sub">${esc(s.period || "all time")}</div></div>
+      <div class="stat-card"><div class="label">Spend (${esc(base)})</div><div class="value" style="font-size:1.15rem">${esc(gbp)}</div>
+        <div class="stat-sub">${esc(byCurrency[base]?.count ?? 0)} invoices</div></div>
+      <div class="stat-card"><div class="label">Other currencies</div><div class="value" style="font-size:1rem">${esc(otherSpend)}</div>
+        <div class="stat-sub">not converted — no FX rates held</div></div>
+      <div class="stat-card"><div class="label">Average amount</div><div class="value" style="font-size:1.15rem">${fmtMoney(s.average_amount || 0)}</div></div>
+      <div class="stat-card"><div class="label">Top vendor</div><div class="value" style="font-size:1rem">${esc(topVendor?.vendor || "—")}</div>
+        <div class="stat-sub">${topVendor ? fmtMoney(topVendor.total) : ""}</div></div>
+      <div class="stat-card"><div class="label">Categories</div><div class="value">${esc(Object.keys(byCat).length)}</div></div>`;
+
+    if (typeof Chart === "undefined") {
+      msg.innerHTML = `<div class="error-banner">Chart.js failed to load. Check network / CDN.</div>`;
+      return;
+    }
+
+    const months = s.by_month || [];
+    const monthLabels = months.map((m) => m.month);
+    const monthTotals = months.map((m) => Number(m.total) || 0);
+
+    const catEntries = Object.entries(byCat).sort((a, b) => (b[1].total || 0) - (a[1].total || 0));
+    const catLabels = catEntries.map(([k]) => k);
+    const catTotals = catEntries.map(([, v]) => Number(v.total) || 0);
+
+    const vendors = s.top_5_vendors || [];
+    const vendorLabels = vendors.map((v) => v.vendor);
+    const vendorTotals = vendors.map((v) => Number(v.total) || 0);
+
+    const emptyChartNote = (canvasId, text) => {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const parent = canvas.parentElement;
+      parent.innerHTML = `<div class="empty-state">${esc(text)}</div>`;
+    };
+
+    if (!monthLabels.length) {
+      emptyChartNote("chart-month", "No monthly data yet. Add invoices or clear the period filter.");
+    } else {
+      analyticsCharts.push(
+        new Chart($("#chart-month"), {
+          type: "line",
+          data: {
+            labels: monthLabels,
+            datasets: [
+              {
+                label: "Invoice total",
+                data: monthTotals,
+                borderColor: "#2563eb",
+                backgroundColor: "rgba(37, 99, 235, 0.12)",
+                fill: true,
+                tension: 0.25,
+                pointRadius: 3,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              y: { beginAtZero: true, ticks: { callback: (v) => Number(v).toLocaleString() } },
+            },
+          },
+        })
+      );
+    }
+
+    if (!catLabels.length) {
+      emptyChartNote("chart-category", "No category spend yet.");
+    } else {
+      analyticsCharts.push(
+        new Chart($("#chart-category"), {
+          type: "doughnut",
+          data: {
+            labels: catLabels,
+            datasets: [
+              {
+                data: catTotals,
+                backgroundColor: catLabels.map((_, i) => CHART_PALETTE[i % CHART_PALETTE.length]),
+                borderWidth: 0,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { position: "bottom" } },
+          },
+        })
+      );
+    }
+
+    if (!vendorLabels.length) {
+      emptyChartNote("chart-vendors", "No vendor data yet.");
+    } else {
+      analyticsCharts.push(
+        new Chart($("#chart-vendors"), {
+          type: "bar",
+          data: {
+            labels: vendorLabels,
+            datasets: [
+              {
+                label: "Spend",
+                data: vendorTotals,
+                backgroundColor: "#059669",
+                borderRadius: 6,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            indexAxis: "y",
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { beginAtZero: true, ticks: { callback: (v) => Number(v).toLocaleString() } },
+            },
+          },
+        })
+      );
+    }
   } catch (e) {
     msg.innerHTML = `<div class="error-banner">${esc(e.message)}</div>`;
-    stats.innerHTML = `<div class="stat-card"><div class="label">Status</div><div class="value" style="font-size:1rem">API</div></div>`;
+    statsEl.innerHTML = `<div class="stat-card"><div class="label">Status</div><div class="value" style="font-size:1rem">API error</div></div>`;
   }
 }
 
@@ -608,6 +888,55 @@ function renderTaxRegisterTable(rows) {
     .join("")}</tbody></table></div>`;
 }
 
+const VAT_BOX_LABELS = {
+  box_1: "Box 1 — VAT due on sales and other outputs",
+  box_2: "Box 2 — VAT due on acquisitions from Northern Ireland",
+  box_3: "Box 3 — Total VAT due (Box 1 + Box 2)",
+  box_4: "Box 4 — VAT reclaimed on purchases and other inputs",
+  box_5: "Box 5 — Net VAT to pay or reclaim (Box 3 − Box 4)",
+  box_6: "Box 6 — Total value of sales excluding VAT",
+  box_7: "Box 7 — Total value of purchases excluding VAT",
+  box_8: "Box 8 — Value of dispatches to Northern Ireland",
+  box_9: "Box 9 — Value of acquisitions from Northern Ireland",
+};
+
+function renderVatReturn(data) {
+  const boxes = data.boxes || {};
+  const counts = data.line_counts || {};
+  const basis = data.basis || {};
+  const unsupported = new Set((data.unsupported_boxes || []).map((u) => `box_${u.box}`));
+
+  const rows = Object.keys(VAT_BOX_LABELS)
+    .map((key) => {
+      const boxNo = key.replace("box_", "");
+      const strong = key === "box_3" || key === "box_5";
+      const note = unsupported.has(key) ? '<span class="badge badge-warn">not derivable</span>' : "";
+      return `<tr style="${strong ? "font-weight:700;border-top:1px solid var(--border)" : ""}">
+        <td>${esc(VAT_BOX_LABELS[key])} ${note}</td>
+        <td style="text-align:right">${fmtMoney(boxes[key] || 0)}</td>
+        <td style="text-align:right;color:var(--text-muted)">${esc(counts[boxNo] ?? 0)}</td>
+        <td style="color:var(--text-muted);font-size:0.78rem">${esc(basis[key] || "")}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const payable = data.net_position === "payable_to_hmrc";
+  const positionBadge = payable
+    ? `<span class="badge badge-warn">${fmtMoney(data.net_amount || 0)} payable to HMRC</span>`
+    : `<span class="badge badge-success">${fmtMoney(data.net_amount || 0)} reclaimable from HMRC</span>`;
+
+  return `<p style="color:var(--text-muted);font-size:0.8rem;margin:0 0 0.5rem">
+      UK VAT return · ${esc(data.period?.from)} to ${esc(data.period?.to)} · ${esc(data.currency || "GBP")}
+    </p>
+    <div style="margin-bottom:0.75rem">${positionBadge}</div>
+    <div class="table-wrap"><table class="data"><thead><tr>
+      <th>Box</th><th style="text-align:right">Amount</th><th style="text-align:right">Lines</th><th>How it was derived</th>
+    </tr></thead><tbody>${rows}</tbody></table></div>
+    <p style="color:var(--text-muted);font-size:0.75rem;margin-top:0.75rem">
+      Reproducibility hash: <code>${esc((data.content_hash || "").slice(0, 16))}…</code> — recomputing this period must reproduce the same hash.
+    </p>`;
+}
+
 function repSectionHeaderRow(label) {
   return `<tr><td colspan="2" style="font-weight:600;background:#f8fafc">${esc(label)}</td></tr>`;
 }
@@ -701,6 +1030,7 @@ async function viewReports() {
       <button type="button" class="tab" data-tab="pl">P &amp; L</button>
       <button type="button" class="tab" data-tab="bs">Balance sheet</button>
       <button type="button" class="tab" data-tab="tax">Tax register</button>
+      <button type="button" class="tab" data-tab="vat">VAT return</button>
       <button type="button" class="tab" data-tab="pack">Export pack</button>
     </div>
     <div class="form-row" style="max-width:480px">
@@ -741,6 +1071,9 @@ async function viewReports() {
       } else if (active === "tax") {
         data = await api(`/api/finance/reports/tax-register?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
         out.innerHTML = renderTaxRegisterTable(data.rows || []);
+      } else if (active === "vat") {
+        data = await api(`/api/finance/reports/vat-return?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+        out.innerHTML = renderVatReturn(data);
       } else {
         data = await api(`/api/finance/reports/export-pack?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
         out.innerHTML = `<h3 style="margin:0 0 0.5rem">Trial balance</h3>${renderTrialBalanceTable(data.trial_balance || [])}
@@ -1724,6 +2057,7 @@ async function viewKnowledgeBase() {
 
 const VIEWS = {
   "/dashboard": viewDashboard,
+  "/analytics": viewAnalytics,
   "/invoices": viewInvoices,
   "/extract": viewExtract,
   "/assistant": viewAssistant,

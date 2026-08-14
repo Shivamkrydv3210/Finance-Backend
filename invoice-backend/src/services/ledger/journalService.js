@@ -82,7 +82,7 @@ export async function createJournalEntry(params, opts = {}) {
     tax_amount: ln.tax_amount != null ? round4(ln.tax_amount) : null,
     party_type: ln.party_type || null,
     party_id: ln.party_id ?? null,
-    currency_code: ln.currency_code || 'INR',
+    currency_code: ln.currency_code || 'GBP',
   }));
 
   const { error: jlErr } = await supabase.from('journal_lines').insert(lineRows);

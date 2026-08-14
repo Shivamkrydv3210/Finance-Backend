@@ -11,7 +11,7 @@ async function loadAccountsMap(accountIds) {
   return new Map((data || []).map((a) => [a.account_id, a]));
 }
 
-async function loadPostedLines(fromDate, toDate) {
+export async function loadPostedLines(fromDate, toDate) {
   const { data: entries, error: e1 } = await supabase
     .from('journal_entries')
     .select('journal_entry_id, entry_date')

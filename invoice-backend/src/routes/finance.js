@@ -5,6 +5,7 @@ import { listPeriods, updatePeriodStatus, getPeriodForDate } from '../services/l
 import { createJournalEntry, listJournalEntries, setJournalApproval, postDraftJournal, voidJournalEntry } from '../services/ledger/journalService.js';
 import { postInvoiceToLedger } from '../services/posting/invoicePostingService.js';
 import { trialBalance, profitAndLoss, balanceSheet, taxRegister } from '../services/reports/financialReportService.js';
+import { computeVatReturn, saveVatReturn } from '../services/reports/vatReturnService.js';
 import { verifyManualJournalVat } from '../services/validation/ukValidation.js';
 
 const router = Router();
@@ -89,6 +90,22 @@ router.get('/finance/reports/tax-register', async (req, res) => {
     const { from, to } = req.query;
     if (!from || !to) return res.status(400).json({ error: 'from and to required' });
     res.json({ report: 'tax_register', rows: await taxRegister(from, to) });
+  } catch (err) {
+    res.status(400).json({ error: safeError(err) });
+  }
+});
+
+/** UK VAT return, Boxes 1–9, with the journal lines behind every box. `save=true` persists a draft. */
+router.get('/finance/reports/vat-return', async (req, res) => {
+  try {
+    const { from, to, save } = req.query;
+    if (!from || !to) return res.status(400).json({ error: 'from and to required' });
+    const computed = await computeVatReturn(from, to);
+    if (save === 'true') {
+      const saved = await saveVatReturn(computed);
+      return res.json({ ...computed, ...saved });
+    }
+    res.json(computed);
   } catch (err) {
     res.status(400).json({ error: safeError(err) });
   }

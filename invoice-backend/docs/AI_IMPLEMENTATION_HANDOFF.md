@@ -20,6 +20,9 @@ The live **Finance Console** is static HTML/JS at repo `invoice-backend/public/`
 - **Average** invoice amount, **highest** and **lowest** invoice (amount + vendor name).
 - **Breakdown by category** (`fuel`, `maintenance`, `repair`, `parts`, `other`): count and sum per category.
 - **Top 5 vendors** by total spend: vendor name, invoice count, total.
+- **By month** (`by_month`): array of `{ month: "YYYY-MM", count, total }` sorted ascending (for Analytics charts).
+
+**UI:** Overview and `#/analytics` render Chart.js KPI charts from this payload. Optional Metabase embed via `window.__METABASE_*` in `public/js/api-config.js` (see `docs/METABASE.md`).
 
 **Empty data:** Returns zeros and empty structures if there are no invoices (or none in the selected period).
 

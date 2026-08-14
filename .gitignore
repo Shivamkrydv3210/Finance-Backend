@@ -15,6 +15,9 @@ node_modules/
 temp/
 *.log
 
+# Local Netlify manual upload bundle (do not commit)
+invoice-backend/finance-console-netlify.zip
+
 # OS files
 .DS_Store
 Thumbs.db

@@ -41,12 +41,17 @@ npm run db:apply-schema
 7. `08_fixed_assets_and_localization.sql` — `fixed_assets`
 8. `09_uk_invoice_accuracy.sql` — UK vendor identifiers (VAT/CRN/sort code), invoice validation state, `invoice_vat_lines`
 9. `10_uk_statutory_coa.sql` — `statutory_heading`/`statutory_sort_order` on `accounts`, ~30 new accounts (fixed assets, VAT control, Corporation Tax, PAYE/NIC, pensions, director's loan, equity, cost of sales, standard admin expense categories)
+10. `11_journal_controls.sql` — reversal linkage on `journal_entries`
+11. `12_uk_tax_kb.sql` — `6250` Irrecoverable VAT, `expense_category`, GBP defaults
+12. `13_vat_return.sql` — `vat_returns` + `vat_return_lines` (Box 1–9 with per-box drilldown)
 
 ## Setup
 
 1. Put secrets in **repo-root** `.env` and/or `invoice-backend/.env`. `src/config.js` loads repo-root first, then `invoice-backend/.env` only for variables not already set — so a template `invoice-backend/.env` with `OPENAI_API_KEY=sk-...` will not override real keys in the repo root file.
 2. `npm install` && `npm start`
-3. Open **http://localhost:3001/** for the **Finance Console** (sidebar UI: invoices, ledger, reports, bank, month-end, NL query, AI assistant). Minimal legacy chat-only page: `/chat-legacy.html`.
+3. Open **http://localhost:3001/** for the **Finance Console** (sidebar UI: Overview/Analytics with Chart.js KPIs, invoices, ledger, reports, bank, month-end, NL query, AI assistant). Minimal legacy chat-only page: `/chat-legacy.html`.
+
+**Analytics dashboard:** Overview and **Analytics** use Chart.js + `GET /api/stats` (includes `by_month`). Optional Metabase BI + Metabot: see [`../docs/METABASE.md`](../docs/METABASE.md) and [`../docker-compose.metabase.yml`](../docker-compose.metabase.yml).
 
 **Production deploy (Render + Netlify, env vars, `api-config.js`):** repo root [`../DEPLOY.md`](../DEPLOY.md) and [`../render.yaml`](../render.yaml).
 
@@ -96,6 +101,7 @@ An invoice that fails any check gets `validation_status: 'pending_review'` and i
 | GET | `/api/finance/reports/pl` | P&amp;L for range |
 | GET | `/api/finance/reports/balance-sheet` | `?as_of=YYYY-MM-DD` |
 | GET | `/api/finance/reports/tax-register` | Lines with `tax_scheme` / tax amounts (localization hook) |
+| GET | `/api/finance/reports/vat-return` | UK VAT return, Boxes 1–9, `?from=&to=&save=true`. Returns the contributing journal lines per box, the derivation rule for each box, and a `content_hash` that recomputing the same period must reproduce. Box 4 excludes blocked input VAT automatically, since that is posted to `6250` at posting time. Boxes 2, 8 and 9 report zero — no Northern Ireland acquisition or dispatch data is captured — and say so in `unsupported_boxes`. |
 | GET | `/api/finance/reports/export-pack` | JSON bundle: TB + tax register for advisor exports |
 | GET | `/api/finance/journals` | Posted journals (`?from`, `?to`, `?limit`, capped at 200); returns `{ entries, total }` |
 | POST | `/api/finance/journals` | Manual journal: `{ entry_date, description, lines: [{ account_code or account_id, debit, credit, tax_rate?, ... }], auto_approve? }`. Any line posted to a VAT account (1310/2110/2120) is arithmetic-checked (`net × rate = VAT`, same as invoices); a failed check forces the entry to `pending` approval regardless of `auto_approve`, and the response includes `vat_check`. |

@@ -13,6 +13,8 @@ npm start
 
 Open `http://localhost:3001/` for the chat UI. See [`invoice-backend/README.md`](invoice-backend/README.md) for the database setup and API.
 
+**Analytics:** Overview / Analytics pages show Chart.js KPIs from `/api/stats`. Optional free BI: [Metabase setup](docs/METABASE.md) (`docker-compose.metabase.yml`).
+
 ## Deploy (production)
 
 Step-by-step for **Render** (API) and **Netlify** (static UI), plus env vars and `api-config.js`: [`DEPLOY.md`](DEPLOY.md). Root [`render.yaml`](render.yaml) defines the backend service for [Render Blueprints](https://render.com/docs/infrastructure-as-code).

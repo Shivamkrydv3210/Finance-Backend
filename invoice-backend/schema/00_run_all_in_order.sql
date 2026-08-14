@@ -521,6 +521,47 @@ CREATE INDEX IF NOT EXISTS idx_invoice_header_expense_category ON invoice_header
 ALTER TABLE invoice_header ALTER COLUMN currency SET DEFAULT 'GBP';
 ALTER TABLE journal_lines ALTER COLUMN currency_code SET DEFAULT 'GBP';
 
+-- ─── 13_vat_return.sql ──────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS vat_returns (
+  vat_return_id  BIGSERIAL PRIMARY KEY,
+  period_from    DATE NOT NULL,
+  period_to      DATE NOT NULL,
+  box_1          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_2          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_3          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_4          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_5          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_6          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_7          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_8          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  box_9          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  status         VARCHAR(20) NOT NULL DEFAULT 'draft'
+                 CHECK (status IN ('draft', 'finalised', 'submitted')),
+  content_hash   TEXT,
+  computed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finalised_at   TIMESTAMPTZ,
+  notes          TEXT,
+  UNIQUE (period_from, period_to)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vat_returns_period ON vat_returns (period_from, period_to);
+
+CREATE TABLE IF NOT EXISTS vat_return_lines (
+  vat_return_line_id BIGSERIAL PRIMARY KEY,
+  vat_return_id      BIGINT NOT NULL REFERENCES vat_returns(vat_return_id) ON DELETE CASCADE,
+  box                SMALLINT NOT NULL CHECK (box >= 1 AND box <= 9),
+  journal_line_id    BIGINT REFERENCES journal_lines(journal_line_id) ON DELETE SET NULL,
+  journal_entry_id   BIGINT REFERENCES journal_entries(journal_entry_id) ON DELETE SET NULL,
+  account_code       VARCHAR(32),
+  tax_scheme         VARCHAR(64),
+  amount             NUMERIC(14,2) NOT NULL DEFAULT 0,
+  entry_date         DATE,
+  description        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_vat_return_lines_return ON vat_return_lines (vat_return_id, box);
+CREATE INDEX IF NOT EXISTS idx_vat_return_lines_journal ON vat_return_lines (journal_line_id);
+
 -- =============================================================================
 -- Done. Optional: SELECT * FROM accounts ORDER BY code; SELECT * FROM fiscal_periods;
 -- =============================================================================
